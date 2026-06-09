@@ -1,0 +1,51 @@
+# Composer dependencies
+/vendor/
+
+# Node.js (if added later)
+/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+
+# PHP / application cache and logs
+/cache/
+/var/cache/
+/var/log/
+/logs/
+*.log
+*.cache
+.phpunit.result.cache
+.php_cs.cache
+
+# Temporary and OS files
+/tmp/
+/temp/
+*.tmp
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# IDE and editor
+.idea/
+.vscode/
+*.sublime-project
+*.sublime-workspace
+.project
+.settings/
+
+# Generated PDFs and uploads (runtime output)
+/uploads/
+/generated/
+*.pdf
+
+# XAMPP / WAMP local overrides
+.htpasswd

@@ -1,0 +1,134 @@
+<?php
+include('header.php');
+$conn = mysqli_connect("localhost", "root", "", "pcs_invoice");
+?>
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>Registration page</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="stylesheet" href="http://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/css/bootstrap.min.css">
+    <script src="http://ajax.googleapis.com/ajax/libs/jquery/3.4.1/jquery.min.js"></script>
+    <script src="http://maxcdn.bootstrapcdn.com/bootstrap/3.4.1/js/bootstrap.min.js"></script>
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Overpass&display=swap">
+    <style>
+    * {
+        box-sizing: border-box;
+    }
+
+    body {
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        margin: 0;
+        padding: 0;
+        background: linear-gradient(135deg, #0f1e45 0%, #1e3c72 100%);
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        height: 100vh;
+    }
+
+    .register-wrapper {
+        background: #ffffff;
+        max-width: 350px;
+        height: 500px;
+        width: 100%;
+        border-radius: 12px;
+        box-shadow: 0 8px 30px rgba(0, 0, 0, 0.2);
+        padding: 25px 20px;
+        display: flex;
+        flex-direction: column;
+        justify-content: flex-start;
+    }
+
+    .logo {
+        text-align: left;
+        margin-bottom: 10px;
+    }
+
+    .logo img {
+        max-width: 120px;
+    }
+
+    h4 {
+        font-size: 22px;
+        text-align: center;
+        color: #222;
+        margin-bottom: 20px;
+    }
+
+    .form-control {
+        height: 36px;
+        font-size: 13px;
+        border-radius: 6px;
+        margin-bottom: 12px;
+    }
+
+    .btn-primary {
+        height: 38px;
+        font-size: 14px;
+        font-weight: bold;
+        border-radius: 6px;
+        background: linear-gradient(180deg, #29BFFF 0%, #8548D0 100%);
+        color: #fff;
+        border: none;
+        width: 100%;
+        margin-top: 10px;
+    }
+
+    .btn-primary:hover {
+        opacity: 0.95;
+    }
+
+    @media (max-width: 480px) {
+        .register-wrapper {
+            height: auto;
+            padding: 20px;
+            margin: 10px;
+        }
+    }
+    </style>
+</head>
+
+<body>
+    <div class="register-wrapper">
+        <div class="logo">
+            <img src="img/PCS-Logo" alt="PCS Logo">
+        </div>
+        <form method="post">
+            <h4><b>Register Here</b></h4>
+            <input type="text" name="first_name" class="form-control" placeholder="First Name">
+            <input type="text" name="last_name" class="form-control" placeholder="Last Name">
+            <input type="email" name="email" class="form-control" placeholder="Email" required>
+            <input type="text" name="address" class="form-control" placeholder="Address">
+            <input type="text" name="mobile" class="form-control" placeholder="Mobile">
+            <input type="password" name="password" class="form-control" placeholder="Password" required>
+            <button type="submit" name="invoice_user" class="btn-primary">Register</button>
+        </form>
+    </div>
+</body>
+
+</html>
+
+<?php
+if (isset($_POST['invoice_user'])) {
+    $first_name = $_POST['first_name'];
+    $last_name  = $_POST['last_name'];
+    $email      = $_POST['email'];
+    $address    = $_POST['address'];
+    $mobile     = $_POST['mobile'];
+    $pass       = $_POST['password'];
+    $password   = md5($pass);
+
+    $q = mysqli_query($conn, "INSERT INTO `invoice_user`(`first_name`,`last_name`,`email`,`address`,`mobile`,`password`) VALUES ('$first_name','$last_name','$email','$address','$mobile','$password')");
+
+    if ($q) {
+        echo "<script>alert('Successfully Registered !!')</script>";
+        echo "<script>window.location= 'index.php'</script>";
+    } else {
+        echo "<script>alert('Unable to Register !')</script>";
+        echo "<meta http-equiv='refresh' content='0'>";
+    }
+}
+?>
