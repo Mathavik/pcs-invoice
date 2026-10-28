@@ -1,6 +1,12 @@
 <?php
-include('header.php');
-$conn = mysqli_connect("localhost", "root", "", "pcs_invoice");
+require_once __DIR__ . '/session.php';
+ensureSessionStarted();
+require_once __DIR__ . '/AuthService.php';
+
+$auth = new AuthService();
+$csrfToken = $auth->csrfToken();
+
+include __DIR__ . '/header.php';
 ?>
 <!DOCTYPE html>
 <html>
@@ -97,13 +103,15 @@ $conn = mysqli_connect("localhost", "root", "", "pcs_invoice");
             <img src="img/PCS-Logo" alt="PCS Logo">
         </div>
         <form method="post">
+            <input type="hidden" name="csrf_token" value="<?php echo htmlspecialchars($csrfToken, ENT_QUOTES, 'UTF-8'); ?>">
             <h4><b>Register Here</b></h4>
-            <input type="text" name="first_name" class="form-control" placeholder="First Name">
+            <input type="text" name="first_name" class="form-control" placeholder="First Name" required>
             <input type="text" name="last_name" class="form-control" placeholder="Last Name">
             <input type="email" name="email" class="form-control" placeholder="Email" required>
             <input type="text" name="address" class="form-control" placeholder="Address">
             <input type="text" name="mobile" class="form-control" placeholder="Mobile">
-            <input type="password" name="password" class="form-control" placeholder="Password" required>
+            <input type="password" name="password" class="form-control" placeholder="Password (min 8 characters)"
+                autocomplete="new-password" minlength="8" required>
             <button type="submit" name="invoice_user" class="btn-primary">Register</button>
         </form>
     </div>
@@ -113,22 +121,29 @@ $conn = mysqli_connect("localhost", "root", "", "pcs_invoice");
 
 <?php
 if (isset($_POST['invoice_user'])) {
-    $first_name = $_POST['first_name'];
-    $last_name  = $_POST['last_name'];
-    $email      = $_POST['email'];
-    $address    = $_POST['address'];
-    $mobile     = $_POST['mobile'];
-    $pass       = $_POST['password'];
-    $password   = md5($pass);
-
-    $q = mysqli_query($conn, "INSERT INTO `invoice_user`(`first_name`,`last_name`,`email`,`address`,`mobile`,`password`) VALUES ('$first_name','$last_name','$email','$address','$mobile','$password')");
-
-    if ($q) {
-        echo "<script>alert('Successfully Registered !!')</script>";
-        echo "<script>window.location= 'index.php'</script>";
+    if (!$auth->validateCsrf((string) ($_POST['csrf_token'] ?? ''))) {
+        echo '<script>alert(' . json_encode('Your session expired. Please refresh the page and try again.') . ');</script>';
     } else {
-        echo "<script>alert('Unable to Register !')</script>";
-        echo "<meta http-equiv='refresh' content='0'>";
+        try {
+            $auth->register(
+                (string) ($_POST['first_name'] ?? ''),
+                (string) ($_POST['last_name'] ?? ''),
+                (string) ($_POST['email'] ?? ''),
+                (string) ($_POST['address'] ?? ''),
+                (string) ($_POST['mobile'] ?? ''),
+                (string) ($_POST['password'] ?? '')
+            );
+
+            rememberEmailCookie((string) ($_POST['email'] ?? ''));
+
+            echo '<script>alert(' . json_encode('Successfully Registered! You can now log in.') . ');</script>';
+            echo "<script>window.location = 'index.php'</script>";
+        } catch (AuthException $e) {
+            echo '<script>alert(' . json_encode($e->getMessage()) . ');</script>';
+        } catch (Throwable $e) {
+            error_log('Registration error: ' . $e->getMessage());
+            echo '<script>alert(' . json_encode('Unable to register right now. Please try again later.') . ');</script>';
+        }
     }
 }
 ?>

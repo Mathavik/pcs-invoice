@@ -54,11 +54,16 @@ class Invoice
     // User login
     public function loginUsers($email, $password)
     {
-        $sqlQuery = "
-            SELECT id, email, first_name, last_name, address, mobile 
-            FROM " . $this->invoiceUserTable . " 
-            WHERE email='" . $email . "' AND password='" . md5($password) . "'";
-        return $this->getData($sqlQuery);
+        require_once __DIR__ . '/AuthService.php';
+
+        $auth = new AuthService();
+        $user = $auth->login(
+            (string) $email,
+            (string) $password,
+            (string) ($_SERVER['REMOTE_ADDR'] ?? '')
+        );
+
+        return $user !== null ? [$user] : [];
     }
 
     // After Loggedin

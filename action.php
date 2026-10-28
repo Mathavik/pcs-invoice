@@ -44,6 +44,37 @@ register_shutdown_function(function () {
 
 require_once 'session.php';
 ensureSessionStarted();
+
+function destroyLoginSession(): void
+{
+    $_SESSION = [];
+
+    if (ini_get('session.use_cookies')) {
+        $params = session_get_cookie_params();
+        setcookie(session_name(), '', [
+            'expires' => time() - 42000,
+            'path' => $params['path'],
+            'domain' => $params['domain'],
+            'secure' => $params['secure'],
+            'httponly' => $params['httponly'],
+            'samesite' => $params['samesite'] ?? 'Lax',
+        ]);
+    }
+
+    session_destroy();
+}
+
+if (isset($_GET['action']) && $_GET['action'] === 'logout') {
+    destroyLoginSession();
+    header('Location: index.php', true, 302);
+    exit;
+}
+
+if (isset($_POST['action']) && $_POST['action'] === 'logout') {
+    destroyLoginSession();
+    sendJsonAndExit(1, 'Logged out successfully.');
+}
+
 require_once 'Invoice.php';
 require_once 'Quotation.php';
 require_once 'mail_config.php';
@@ -168,18 +199,6 @@ if (isset($_POST['action']) && $_POST['action'] === 'convert_quotation') {
         'message' => 'Quotation converted to an invoice successfully.',
         'invoice_id' => $invoiceId
     ]);
-}
-
-if (isset($_POST['action']) && $_POST['action'] == 'logout') {
-	session_unset();
-	session_destroy();
-    sendJsonAndExit(1, 'Logged out successfully.');
-}
-
-if (isset($_GET['action']) && $_GET['action'] == 'logout') {
-	session_unset();
-	session_destroy();
-    sendJsonAndExit(1, 'Logged out successfully.');
 }
 
 sendJsonAndExit(0, 'Invalid request.');
