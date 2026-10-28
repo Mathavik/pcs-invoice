@@ -15,9 +15,10 @@ $currentPaginationPage = $_GET['p'] ?? 1;
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Dashboard</title>
+    <title><?php echo $page === 'quotation_list' ? 'Quotation Management' : 'Dashboard'; ?></title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
     <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css" rel="stylesheet">
+    <link href="css/quotation.css" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <style>
@@ -96,7 +97,7 @@ $currentPaginationPage = $_GET['p'] ?? 1;
                 <hr>
                 <a href="#"><i class="bi bi-receipt"></i> Sell</a>
                 <hr>
-                <a href="#"><i class="bi bi-file-earmark-text"></i> Quotation</a>
+                <a href="?page=quotation_list"><i class="bi bi-file-earmark-text"></i> Quotation</a>
                 <hr>
                 <div>
                     <a class="d-flex justify-content-between align-items-center" data-bs-toggle="collapse"
@@ -132,6 +133,8 @@ $currentPaginationPage = $_GET['p'] ?? 1;
                             include('dashboard.php');
                         } elseif ($page === 'invoice_list') {
                             include('invoice_list.php');
+                        } elseif ($page === 'quotation_list') {
+                            include('quotation_list.php');
                         } else {
                             echo "<div class='alert alert-warning'>Page not found</div>";
                         }

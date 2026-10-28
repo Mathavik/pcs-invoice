@@ -3,16 +3,28 @@ ob_start();
 header('Content-Type: application/json; charset=utf-8');
 ini_set('display_errors', '0');
 
-function sendJsonAndExit(int $status, string $message): void
+function sendJsonResponse(array $payload): void
 {
     while (ob_get_level() > 0) {
         ob_end_clean();
     }
-    echo json_encode([
+    echo json_encode($payload);
+    exit;
+}
+
+function sendJsonAndExit(int $status, string $message): void
+{
+    sendJsonResponse([
         'status' => $status,
         'message' => $message
     ]);
-    exit;
+}
+
+function requireQuotationCsrf(): void
+{
+    if (!Quotation::validateCsrf($_POST['csrf_token'] ?? '')) {
+        sendJsonAndExit(0, 'Your security token has expired. Please refresh the page and try again.');
+    }
 }
 
 set_error_handler(function ($severity, $errorMessage) {
@@ -26,15 +38,15 @@ set_exception_handler(function (Throwable $exception) {
 register_shutdown_function(function () {
     $fatal = error_get_last();
     if ($fatal && in_array($fatal['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
-        sendJsonAndExit(0, 'Server error while sending invoice email.');
+        sendJsonAndExit(0, 'Server error while processing the request.');
     }
 });
 
 require_once 'session.php';
 ensureSessionStarted();
 require_once 'Invoice.php';
+require_once 'Quotation.php';
 require_once 'mail_config.php';
-require_once 'invoice_pdf_generator.php';
 
 use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception;
@@ -70,6 +82,7 @@ if (isset($_POST['action']) && $_POST['action'] === 'send_invoice_email') {
         sendJsonAndExit(0, 'Invoice not found.');
     }
 
+    require_once 'invoice_pdf_generator.php';
     $pdfBytes = generateInvoicePdfBytes($invoiceId);
     if ($pdfBytes === '') {
         sendJsonAndExit(0, 'Failed to generate invoice PDF.');
@@ -105,6 +118,56 @@ if (isset($_POST['action']) && $_POST['action'] === 'send_invoice_email') {
 if (isset($_POST['action']) && $_POST['action'] === 'delete_invoice' && isset($_POST['id'])) {
     $result = $invoice->deleteInvoice($_POST['id']);
     sendJsonAndExit($result ? 1 : 0, $result ? 'Invoice deleted successfully.' : 'Failed to delete invoice.');
+}
+
+if (isset($_POST['action']) && $_POST['action'] === 'delete_quotation') {
+    requireQuotationCsrf();
+    $quotationId = intval($_POST['id'] ?? 0);
+    if ($quotationId <= 0) {
+        sendJsonAndExit(0, 'Invalid quotation ID.');
+    }
+
+    $quotation = new Quotation();
+    $deleted = $quotation->deleteQuotation($quotationId);
+    sendJsonAndExit(
+        $deleted ? 1 : 0,
+        $deleted
+            ? 'Quotation deleted successfully.'
+            : 'Unable to delete this quotation. It may be converted or no longer available.'
+    );
+}
+
+if (isset($_POST['action']) && $_POST['action'] === 'update_quotation_status') {
+    requireQuotationCsrf();
+    $quotationId = intval($_POST['id'] ?? 0);
+    $newStatus = trim((string) ($_POST['status'] ?? ''));
+
+    if ($quotationId <= 0) {
+        sendJsonAndExit(0, 'Invalid quotation ID.');
+    }
+    if ($newStatus === '') {
+        sendJsonAndExit(0, 'Please select a status.');
+    }
+
+    $quotation = new Quotation();
+    $quotation->updateStatus($quotationId, $newStatus);
+    sendJsonAndExit(1, 'Quotation status updated to ' . $newStatus . '.');
+}
+
+if (isset($_POST['action']) && $_POST['action'] === 'convert_quotation') {
+    requireQuotationCsrf();
+    $quotationId = intval($_POST['id'] ?? 0);
+    if ($quotationId <= 0) {
+        sendJsonAndExit(0, 'Invalid quotation ID.');
+    }
+
+    $quotation = new Quotation();
+    $invoiceId = $quotation->convertToInvoice($quotationId);
+    sendJsonResponse([
+        'status' => 1,
+        'message' => 'Quotation converted to an invoice successfully.',
+        'invoice_id' => $invoiceId
+    ]);
 }
 
 if (isset($_POST['action']) && $_POST['action'] == 'logout') {

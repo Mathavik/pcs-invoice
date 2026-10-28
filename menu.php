@@ -11,6 +11,15 @@
                 <li><a class="dropdown-item" href="create_invoice.php">Create Invoice</a></li>
             </ul>
         </li>
+        <li class="nav-item dropdown ml-2">
+            <button class="btn btn-outline-primary dropdown-toggle" type="button" data-toggle="dropdown">
+                Quotation <span class="caret"></span>
+            </button>
+            <ul class="dropdown-menu">
+                <li><a class="dropdown-item" href="main.php?page=quotation_list">Quotation List</a></li>
+                <li><a class="dropdown-item" href="create_quotation.php">Create Quotation</a></li>
+            </ul>
+        </li>
     </ul>
 
     <?php if (!empty($_SESSION['userId'])) { ?>

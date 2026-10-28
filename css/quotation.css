@@ -1,0 +1,314 @@
+/* Quotation Management -------------------------------------------------- */
+
+.quotation-body {
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+    background: linear-gradient(135deg, #0f1e45 0%, #1e3c72 100%);
+    min-height: 100vh;
+    padding: 0;
+    margin: 0;
+}
+
+.quotation-page {
+    max-width: 1250px;
+    margin: 0 auto;
+    padding: 24px 15px 48px;
+}
+
+.quotation-card {
+    background: #fff;
+    border: 0;
+    border-radius: 14px;
+    box-shadow: 0 12px 35px rgba(0, 0, 0, .12);
+}
+
+.quotation-card .card-body {
+    padding: 28px;
+}
+
+.quotation-title {
+    color: #1e3c72;
+    font-weight: 700;
+    letter-spacing: .2px;
+    margin: 0;
+}
+
+.quotation-subtitle {
+    color: #6c757d;
+    margin: 6px 0 0;
+}
+
+.quotation-toolbar {
+    background: #f7f9fc;
+    border: 1px solid #e6ebf2;
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.quotation-table-wrap {
+    border: 1px solid #e6ebf2;
+    border-radius: 12px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    -webkit-overflow-scrolling: touch;
+}
+
+.quotation-table {
+    width: 100%;
+    min-width: 960px;
+    margin: 0;
+    border-collapse: collapse;
+    text-align: center;
+}
+
+.quotation-table thead th {
+    background: linear-gradient(135deg, #0f1e45 0%, #1e3c72 100%);
+    color: #fff;
+    border: 0;
+    padding: 12px 10px;
+    font-size: .82rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .25px;
+    white-space: nowrap;
+    vertical-align: middle;
+}
+
+.quotation-table tbody td {
+    padding: 12px 10px;
+    border-bottom: 1px solid #edf0f5;
+    vertical-align: middle;
+    font-size: .9rem;
+}
+
+.quotation-table tbody tr:last-child td {
+    border-bottom: 0;
+}
+
+.quotation-table tbody tr:hover {
+    background: #f8fbff;
+}
+
+.quotation-actions a,
+.quotation-actions button {
+    color: #1e3c72;
+    font-size: 1rem;
+    margin: 0 4px;
+    text-decoration: none;
+}
+
+.quotation-actions a:hover,
+.quotation-actions button:hover {
+    color: #0f1e45;
+    text-decoration: none;
+}
+
+.quotation-actions .disabled {
+    color: #b9c0ca;
+    pointer-events: none;
+}
+
+.quotation-status {
+    display: inline-block;
+    padding: .32rem .65rem;
+    border-radius: 999px;
+    font-size: .75rem;
+    font-weight: 700;
+    line-height: 1;
+    white-space: nowrap;
+}
+
+.status-draft { background: #e2e3e5; color: #41464b; }
+.status-sent { background: #cff4fc; color: #055160; }
+.status-accepted { background: #d1e7dd; color: #0f5132; }
+.status-rejected { background: #f8d7da; color: #842029; }
+.status-expired { background: #fff3cd; color: #664d03; }
+.status-converted { background: #cfe2ff; color: #084298; }
+
+.quotation-empty {
+    padding: 34px 15px !important;
+    color: #8993a4;
+    font-style: italic;
+}
+
+.quotation-totals {
+    background: #f7f9fc;
+    border: 1px solid #e6ebf2;
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.quotation-totals table {
+    width: 100%;
+    margin: 0;
+}
+
+.quotation-totals th {
+    color: #5b6575;
+    font-weight: 600;
+    padding: 6px 0;
+    vertical-align: top;
+}
+
+.quotation-totals td {
+    text-align: right;
+    padding: 6px 0;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.quotation-totals tr.grand-total th,
+.quotation-totals tr.grand-total td {
+    border-top: 2px solid #dbe3ee;
+    padding-top: 12px;
+    font-size: 1.08rem;
+    color: #0f1e45;
+}
+
+.quotation-items-table {
+    min-width: 980px;
+}
+
+.quotation-items-table thead th {
+    background: #eef3f9;
+    color: #1e3c72;
+    border-bottom: 2px solid #d9e2ee;
+    font-size: .78rem;
+    text-transform: uppercase;
+    letter-spacing: .2px;
+    vertical-align: middle;
+    white-space: nowrap;
+}
+
+.quotation-items-table td {
+    vertical-align: middle;
+    border-color: #e6ebf2;
+}
+
+.quotation-items-table .form-control {
+    min-width: 90px;
+}
+
+.quotation-items-table .item-description {
+    min-width: 180px;
+}
+
+.quotation-items-table .line-total {
+    white-space: nowrap;
+    font-weight: 700;
+    color: #1e3c72;
+}
+
+.quotation-items-table .row-index {
+    color: #6c757d;
+    font-weight: 600;
+}
+
+.quotation-view-meta {
+    background: #f7f9fc;
+    border: 1px solid #e6ebf2;
+    border-radius: 12px;
+    padding: 18px;
+    height: 100%;
+}
+
+.quotation-view-meta .label {
+    color: #6c757d;
+    font-size: .78rem;
+    text-transform: uppercase;
+    letter-spacing: .3px;
+    font-weight: 700;
+    margin-bottom: 3px;
+}
+
+.quotation-view-meta .value {
+    color: #1f2937;
+    font-weight: 600;
+    margin-bottom: 12px;
+    word-break: break-word;
+}
+
+.quotation-view-meta .value:last-child {
+    margin-bottom: 0;
+}
+
+.quotation-view-table {
+    width: 100%;
+    min-width: 760px;
+    border-collapse: collapse;
+    font-size: .9rem;
+}
+
+.quotation-view-table th {
+    background: #1e3c72;
+    color: #fff;
+    padding: 11px 9px;
+    text-align: left;
+    font-size: .78rem;
+    text-transform: uppercase;
+    letter-spacing: .2px;
+    white-space: nowrap;
+}
+
+.quotation-view-table td {
+    padding: 11px 9px;
+    border-bottom: 1px solid #edf0f5;
+    vertical-align: top;
+}
+
+.quotation-view-table tr:last-child td {
+    border-bottom: 0;
+}
+
+.quotation-view-total {
+    background: linear-gradient(135deg, #0f1e45 0%, #1e3c72 100%);
+    color: #fff;
+    border-radius: 12px;
+    padding: 18px 20px;
+}
+
+.quotation-view-total .label {
+    font-size: .8rem;
+    opacity: .85;
+    text-transform: uppercase;
+    letter-spacing: .4px;
+}
+
+.quotation-view-total .amount {
+    font-size: 1.65rem;
+    font-weight: 700;
+}
+
+.quotation-share-link {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    text-align: left;
+}
+
+.quotation-share-link i {
+    width: 24px;
+    text-align: center;
+}
+
+.quotation-muted {
+    color: #6c757d;
+}
+
+@media (max-width: 767.98px) {
+    .quotation-page {
+        padding: 14px 10px 30px;
+    }
+
+    .quotation-card .card-body {
+        padding: 18px;
+    }
+
+    .quotation-title {
+        font-size: 1.35rem;
+    }
+
+    .quotation-toolbar {
+        padding: 12px;
+    }
+}
