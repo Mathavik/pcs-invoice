@@ -29,6 +29,179 @@
         var addButton = document.getElementById('addItemRow');
         var errorBox = document.getElementById('quotationFormErrors');
         var symbol = form.getAttribute('data-currency-symbol') || '\u20B9';
+        var customerNameInput = form.querySelector('[name="customer_name"]');
+        var customerList = document.getElementById('quotationCustomerSuggestions');
+        var customerOptionsBox = document.getElementById('quotationCustomerOptions');
+        var customerSuggestions = [];
+        var lastFilledCustomer = '';
+        var activeCustomerIndex = -1;
+
+        if (customerList) {
+            for (var suggestionIndex = 0; suggestionIndex < customerList.options.length; suggestionIndex++) {
+                var suggestion = customerList.options[suggestionIndex];
+                var suggestionName = (suggestion.value || '').trim();
+                if (suggestionName === '') {
+                    continue;
+                }
+                customerSuggestions.push({
+                    name: suggestionName,
+                    phone: suggestion.getAttribute('data-phone') || '',
+                    email: suggestion.getAttribute('data-email') || '',
+                    address: suggestion.getAttribute('data-address') || ''
+                });
+            }
+        }
+
+        function hideCustomerOptions() {
+            if (customerOptionsBox) {
+                customerOptionsBox.hidden = true;
+                customerOptionsBox.innerHTML = '';
+            }
+            activeCustomerIndex = -1;
+        }
+
+        function selectCustomer(customer) {
+            if (!customer) {
+                return;
+            }
+            if (customerNameInput) {
+                customerNameInput.value = customer.name;
+            }
+            lastFilledCustomer = customer.name;
+            ['phone', 'email', 'address'].forEach(function (field) {
+                var input = form.querySelector('[name="customer_' + field + '"]');
+                if (input) {
+                    input.value = customer[field] || '';
+                }
+            });
+            hideCustomerOptions();
+        }
+
+        function matchingCustomers(term) {
+            var query = term.toLowerCase();
+            return customerSuggestions.filter(function (customer) {
+                return query === '' || customer.name.toLowerCase().indexOf(query) !== -1;
+            });
+        }
+
+        function renderCustomerOptions() {
+            if (!customerOptionsBox) {
+                return;
+            }
+
+            var matches = matchingCustomers(customerNameInput ? customerNameInput.value.trim() : '');
+            customerOptionsBox.innerHTML = '';
+            activeCustomerIndex = -1;
+
+            if (!matches.length) {
+                customerOptionsBox.hidden = true;
+                return;
+            }
+
+            matches.slice(0, 8).forEach(function (customer, index) {
+                var option = document.createElement('button');
+                option.type = 'button';
+                option.className = 'quotation-customer-option';
+                option.setAttribute('data-index', String(index));
+
+                var nameSpan = document.createElement('span');
+                nameSpan.className = 'quotation-customer-option-name';
+                nameSpan.textContent = customer.name;
+                option.appendChild(nameSpan);
+
+                var meta = [customer.phone, customer.email].filter(function (value) {
+                    return value !== '';
+                }).join(' | ');
+                if (meta !== '') {
+                    var metaSpan = document.createElement('small');
+                    metaSpan.textContent = meta;
+                    option.appendChild(metaSpan);
+                }
+
+                option.addEventListener('click', function () {
+                    selectCustomer(customer);
+                });
+
+                customerOptionsBox.appendChild(option);
+            });
+
+            customerOptionsBox.hidden = false;
+        }
+
+        function highlightCustomerOption(direction) {
+            if (!customerOptionsBox || customerOptionsBox.hidden) {
+                return;
+            }
+            var options = customerOptionsBox.querySelectorAll('.quotation-customer-option');
+            if (!options.length) {
+                return;
+            }
+            activeCustomerIndex = (activeCustomerIndex + direction + options.length) % options.length;
+            for (var i = 0; i < options.length; i++) {
+                options[i].classList.toggle('is-active', i === activeCustomerIndex);
+            }
+            options[activeCustomerIndex].scrollIntoView({ block: 'nearest' });
+        }
+
+        // Keep focus on the input when clicking inside the dropdown so the
+        // click event still reaches the option button.
+        if (customerOptionsBox) {
+            customerOptionsBox.addEventListener('mousedown', function (event) {
+                event.preventDefault();
+            });
+        }
+
+        if (customerNameInput) {
+            // The native datalist is only a no-JS fallback. The custom panel
+            // below replaces it so both dropdowns never open at the same time.
+            if (customerOptionsBox) {
+                customerNameInput.removeAttribute('list');
+            }
+            customerNameInput.addEventListener('focus', renderCustomerOptions);
+            customerNameInput.addEventListener('click', renderCustomerOptions);
+            customerNameInput.addEventListener('input', function () {
+                lastFilledCustomer = '';
+                renderCustomerOptions();
+            });
+            customerNameInput.addEventListener('keydown', function (event) {
+                if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+                    if (customerOptionsBox && customerOptionsBox.hidden) {
+                        renderCustomerOptions();
+                    }
+                    highlightCustomerOption(event.key === 'ArrowDown' ? 1 : -1);
+                    event.preventDefault();
+                } else if (event.key === 'Enter' && activeCustomerIndex >= 0) {
+                    var matches = matchingCustomers(customerNameInput.value.trim());
+                    selectCustomer(matches[activeCustomerIndex]);
+                    event.preventDefault();
+                } else if (event.key === 'Escape') {
+                    hideCustomerOptions();
+                }
+            });
+            customerNameInput.addEventListener('change', function () {
+                var name = customerNameInput.value.trim();
+                if (name === '' || name === lastFilledCustomer) {
+                    return;
+                }
+                for (var i = 0; i < customerSuggestions.length; i++) {
+                    if (customerSuggestions[i].name === name) {
+                        selectCustomer(customerSuggestions[i]);
+                        return;
+                    }
+                }
+            });
+        }
+
+        document.addEventListener('click', function (event) {
+            if (!customerOptionsBox || customerOptionsBox.hidden) {
+                return;
+            }
+            if (customerOptionsBox.contains(event.target)
+                || (customerNameInput && event.target === customerNameInput)) {
+                return;
+            }
+            hideCustomerOptions();
+        });
 
         if (!tbody || !template) {
             return;
@@ -163,7 +336,7 @@
             errorBox.scrollIntoView({ behavior: 'smooth', block: 'center' });
         }
 
-        function validateForm() {
+        function validateForm(isSending) {
             var errors = [];
             var customerName = form.querySelector('[name="customer_name"]');
             var customerPhone = form.querySelector('[name="customer_phone"]');
@@ -183,6 +356,10 @@
             if (customerEmail && customerEmail.value.trim() !== ''
                 && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(customerEmail.value.trim())) {
                 errors.push('Customer email address is not valid.');
+            }
+
+            if (isSending && (!customerEmail || customerEmail.value.trim() === '')) {
+                errors.push('Customer email is required to send this quotation.');
             }
 
             if (!quotationDate || !quotationDate.value) {
@@ -287,7 +464,11 @@
         }
 
         form.addEventListener('submit', function (event) {
-            if (!validateForm()) {
+            var submitter = event.submitter || null;
+            var isSending = !!(submitter
+                && submitter.name === 'quotation_action'
+                && submitter.value === 'send_quotation');
+            if (!validateForm(isSending)) {
                 event.preventDefault();
             }
         });

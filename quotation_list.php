@@ -87,6 +87,9 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['ajax'])) {
         $result = $quotationService->getQuotationList($filters, $page, 10);
 
         foreach ($result['quotations'] as &$quotationRow) {
+            // The public response token is a credential and is not needed by
+            // the management list UI.
+            unset($quotationRow['public_token']);
             $quotationRow['whatsapp'] = Quotation::formatWhatsAppNumber($quotationRow['customer_phone'] ?? '');
             $quotationRow['quotation_date_display'] = html_entity_decode(pcs_quotation_date($quotationRow['quotation_date'] ?? ''), ENT_QUOTES, 'UTF-8');
             $quotationRow['valid_until_display'] = html_entity_decode(pcs_quotation_date($quotationRow['valid_until'] ?? ''), ENT_QUOTES, 'UTF-8');
@@ -318,6 +321,10 @@ $csrfToken = Quotation::csrfToken();
                     <a href="#" id="shareQuotationEmail" class="btn btn-outline-primary">
                         <i class="bi bi-envelope"></i> Email Quotation Details
                     </a>
+                    <input type="email" id="shareQuotationEmailTo" class="form-control" placeholder="Customer email address">
+                    <button type="button" id="sendQuotationEmail" class="btn btn-primary">
+                        <i class="bi bi-send"></i> Send Email with Accept / Reject Links
+                    </button>
                     <a href="#" id="shareQuotationDownload" class="btn btn-outline-dark" target="_blank" rel="noopener">
                         <i class="bi bi-download"></i> Download PDF
                     </a>
@@ -632,6 +639,8 @@ $csrfToken = Quotation::csrfToken();
         var emailButton = document.getElementById('shareQuotationEmail');
         var downloadButton = document.getElementById('shareQuotationDownload');
         var printButton = document.getElementById('shareQuotationPrint');
+        var emailToInput = document.getElementById('shareQuotationEmailTo');
+        var sendEmailButton = document.getElementById('sendQuotationEmail');
 
         document.getElementById('shareQuotationTitle').textContent = data.quotationNo || 'Quotation';
         document.getElementById('shareQuotationSubtitle').textContent =
@@ -640,6 +649,13 @@ $csrfToken = Quotation::csrfToken();
         if (alertBox) {
             alertBox.textContent = '';
             alertBox.className = 'small mt-2';
+        }
+        if (emailToInput) {
+            emailToInput.value = data.email || '';
+        }
+        if (sendEmailButton) {
+            sendEmailButton.disabled = false;
+            sendEmailButton.innerHTML = '<i class="bi bi-send"></i> Send Email with Accept / Reject Links';
         }
 
         if (data.whatsApp) {
@@ -763,6 +779,68 @@ $csrfToken = Quotation::csrfToken();
         var copyButton = document.getElementById('copyQuotationMessage');
         if (copyButton) {
             copyButton.addEventListener('click', copyMessage);
+        }
+
+        var sendEmailButton = document.getElementById('sendQuotationEmail');
+        if (sendEmailButton) {
+            sendEmailButton.addEventListener('click', function () {
+                var alertBox = document.getElementById('shareQuotationAlert');
+                var emailInput = document.getElementById('shareQuotationEmailTo');
+                var toEmail = emailInput ? emailInput.value.trim() : '';
+                if (!shareData || !shareData.id) {
+                    return;
+                }
+                if (!toEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(toEmail)) {
+                    if (alertBox) {
+                        alertBox.className = 'small mt-2 text-danger';
+                        alertBox.textContent = 'Please enter a valid customer email address.';
+                    }
+                    return;
+                }
+
+                sendEmailButton.disabled = true;
+                sendEmailButton.innerHTML = '<i class="bi bi-send"></i> Sending...';
+                if (alertBox) {
+                    alertBox.className = 'small mt-2';
+                    alertBox.textContent = '';
+                }
+
+                $.ajax({
+                    url: 'action.php',
+                    type: 'POST',
+                    dataType: 'json',
+                    data: {
+                        action: 'send_quotation_email',
+                        quotation_id: shareData.id,
+                        to_email: toEmail,
+                        csrf_token: csrfToken
+                    }
+                }).done(function (response) {
+                    if (response && Number(response.status) === 1) {
+                        if (alertBox) {
+                            alertBox.className = 'small mt-2 text-success';
+                            alertBox.textContent = response.message || 'Quotation email sent successfully.';
+                        }
+                        sendEmailButton.innerHTML = '<i class="bi bi-send"></i> Sent';
+                        loadQuotations(currentPage);
+                    } else {
+                        if (alertBox) {
+                            alertBox.className = 'small mt-2 text-danger';
+                            alertBox.textContent = (response && response.message) || 'Unable to send quotation email.';
+                        }
+                        sendEmailButton.disabled = false;
+                        sendEmailButton.innerHTML = '<i class="bi bi-send"></i> Send Email with Accept / Reject Links';
+                    }
+                }).fail(function (xhr) {
+                    if (alertBox) {
+                        alertBox.className = 'small mt-2 text-danger';
+                        alertBox.textContent = (xhr.responseJSON && xhr.responseJSON.message) ||
+                            'Unable to send quotation email.';
+                    }
+                    sendEmailButton.disabled = false;
+                    sendEmailButton.innerHTML = '<i class="bi bi-send"></i> Send Email with Accept / Reject Links';
+                });
+            });
         }
 
         $(document).on('click', '.deleteQuotation', function (event) {

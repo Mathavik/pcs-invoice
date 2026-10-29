@@ -49,6 +49,8 @@ $e = static function ($value): string {
 
 $totals = ['subtotal' => 0.0, 'discount' => 0.0, 'tax' => 0.0, 'grand' => 0.0];
 $formItems = array_values($formItems);
+$customerSuggestions = isset($customerSuggestions) && is_array($customerSuggestions)
+    ? $customerSuggestions : [];
 ?>
 <div class="quotation-page">
     <div class="card quotation-card">
@@ -104,43 +106,58 @@ $formItems = array_values($formItems);
                 </div>
 
                 <div class="row">
-                    <div class="col-md-8 mb-3">
+                    <div class="col-md-3 mb-3">
                         <label class="form-label font-weight-bold" for="customer_name">Customer Name *</label>
-                        <input type="text" class="form-control" id="customer_name" name="customer_name"
-                            maxlength="150" value="<?php echo $e($quotation['customer_name']); ?>"
-                            placeholder="Customer or company name" required>
+                        <div class="quotation-customer-picker">
+                            <input type="text" class="form-control" id="customer_name" name="customer_name"
+                                maxlength="150" value="<?php echo $e($quotation['customer_name']); ?>"
+                                placeholder="Select or type a customer"
+                                list="quotationCustomerSuggestions" autocomplete="off" required>
+                            <div class="quotation-customer-options" id="quotationCustomerOptions" hidden></div>
+                        </div>
                     </div>
-                    <div class="col-md-4 mb-3">
-                        <label class="form-label font-weight-bold" for="status">Status</label>
-                        <select class="form-control" id="status" name="status">
-                            <?php foreach ($statusOptions as $status): ?>
-                                <option value="<?php echo $e($status); ?>" <?php echo $currentStatus === $status ? 'selected' : ''; ?>>
-                                    <?php echo $e($status); ?>
-                                </option>
-                            <?php endforeach; ?>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="row">
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-3 mb-3">
                         <label class="form-label font-weight-bold" for="customer_phone">Phone / WhatsApp</label>
                         <input type="text" class="form-control" id="customer_phone" name="customer_phone"
                             maxlength="20" value="<?php echo $e($quotation['customer_phone']); ?>"
                             placeholder="+91 98765 43210">
                     </div>
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-3 mb-3">
                         <label class="form-label font-weight-bold" for="customer_email">Email</label>
                         <input type="email" class="form-control" id="customer_email" name="customer_email"
                             maxlength="150" value="<?php echo $e($quotation['customer_email']); ?>"
                             placeholder="customer@example.com">
                     </div>
-                    <div class="col-md-4 mb-3">
+                    <div class="col-md-3 mb-3">
                         <label class="form-label font-weight-bold" for="customer_address">Address</label>
                         <textarea class="form-control" id="customer_address" name="customer_address" rows="2"
                             maxlength="1000" placeholder="Billing address"><?php echo $e($quotation['customer_address']); ?></textarea>
                     </div>
                 </div>
+
+                <?php if ($isEdit): ?>
+                    <div class="row">
+                        <div class="col-md-3 mb-3">
+                            <label class="form-label font-weight-bold" for="status">Status</label>
+                            <select class="form-control" id="status" name="status">
+                                <?php foreach ($statusOptions as $status): ?>
+                                    <option value="<?php echo $e($status); ?>" <?php echo $currentStatus === $status ? 'selected' : ''; ?>>
+                                        <?php echo $e($status); ?>
+                                    </option>
+                                <?php endforeach; ?>
+                            </select>
+                        </div>
+                    </div>
+                <?php endif; ?>
+
+                <datalist id="quotationCustomerSuggestions">
+                    <?php foreach ($customerSuggestions as $suggestedCustomer): ?>
+                        <option value="<?php echo $e($suggestedCustomer['customer_name'] ?? ''); ?>"
+                            data-phone="<?php echo $e($suggestedCustomer['customer_phone'] ?? ''); ?>"
+                            data-email="<?php echo $e($suggestedCustomer['customer_email'] ?? ''); ?>"
+                            data-address="<?php echo $e($suggestedCustomer['customer_address'] ?? ''); ?>"></option>
+                    <?php endforeach; ?>
+                </datalist>
 
                 <hr>
 
@@ -319,14 +336,25 @@ $formItems = array_values($formItems);
 
                 <div class="d-flex flex-wrap justify-content-end pt-2">
                     <a href="<?php echo $e($cancelUrl); ?>" class="btn btn-outline-secondary mr-2 mb-2 mb-sm-0">Cancel</a>
-                    <button type="submit" class="btn btn-success px-4">
-                        <i class="bi bi-check2-circle"></i>
-                        <?php echo $isEdit ? 'Update Quotation' : 'Save Quotation'; ?>
-                    </button>
+                    <?php if ($isEdit): ?>
+                        <button type="submit" class="btn btn-success px-4">
+                            <i class="bi bi-check2-circle"></i>
+                            Update Quotation
+                        </button>
+                    <?php else: ?>
+                        <button type="submit" name="quotation_action" value="save_draft"
+                            class="btn btn-outline-secondary mr-2 mb-2 mb-sm-0">
+                            <i class="bi bi-save"></i> Save Draft
+                        </button>
+                        <button type="submit" name="quotation_action" value="send_quotation"
+                            class="btn btn-success px-4">
+                            <i class="bi bi-send"></i> Send Quotation
+                        </button>
+                    <?php endif; ?>
                 </div>
             </form>
         </div>
     </div>
 </div>
 
-<script src="js/quotation.js"></script>
+<script src="js/quotation.js?v=<?php echo filemtime(__DIR__ . '/js/quotation.js'); ?>"></script>

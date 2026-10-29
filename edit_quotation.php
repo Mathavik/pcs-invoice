@@ -10,6 +10,7 @@ $invoice->checkLoggedIn();
 $quotationService = new Quotation();
 $quotationId = intval($_GET['update_id'] ?? $_POST['quotation_id'] ?? 0);
 $quotationRecord = $quotationId > 0 ? $quotationService->getQuotation($quotationId) : [];
+$customerSuggestions = $quotationService->getCustomerSuggestions();
 
 $pageError = '';
 if (empty($quotationRecord)) {
@@ -24,7 +25,7 @@ if ($pageError !== '') {
     ?>
     <title>Edit Quotation</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="css/quotation.css">
+    <link rel="stylesheet" href="css/quotation.css?v=<?php echo filemtime(__DIR__ . '/css/quotation.css'); ?>">
     </head>
 
     <body class="quotation-body">
@@ -52,7 +53,7 @@ $actionUrl = 'edit_quotation.php?update_id=' . $quotationId;
 $statusOptions = array_values(array_filter(
     Quotation::allowedTransitions($quotationRecord['status']),
     static function ($status) {
-        return $status !== 'Converted';
+        return !in_array($status, ['Converted', 'Accepted'], true);
     }
 ));
 
@@ -111,7 +112,7 @@ include('header.php');
 ?>
 <title>Edit Quotation</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-<link rel="stylesheet" href="css/quotation.css">
+<link rel="stylesheet" href="css/quotation.css?v=<?php echo filemtime(__DIR__ . '/css/quotation.css'); ?>">
 </head>
 
 <body class="quotation-body">

@@ -20,7 +20,7 @@ if ($pageError !== '') {
     ?>
     <title>Quotation Details</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-    <link rel="stylesheet" href="css/quotation.css">
+    <link rel="stylesheet" href="css/quotation.css?v=<?php echo filemtime(__DIR__ . '/css/quotation.css'); ?>">
     </head>
 
     <body class="quotation-body">
@@ -70,10 +70,16 @@ $emailUrl = !empty($quotation['customer_email'])
 $statusNotice = '';
 if (isset($_GET['created'])) {
     $statusNotice = 'Quotation created successfully. You can print, share or download it below.';
+} elseif (isset($_GET['draft_saved'])) {
+    $statusNotice = 'Quotation saved as Draft successfully.';
 } elseif (isset($_GET['updated'])) {
     $statusNotice = 'Quotation updated successfully.';
 } elseif (isset($_GET['converted'])) {
     $statusNotice = 'Quotation converted to an invoice successfully.';
+} elseif (isset($_GET['sent'])) {
+    $statusNotice = 'Quotation email sent successfully.';
+} elseif (isset($_GET['email_failed'])) {
+    $statusNotice = 'Quotation saved as Draft, but the email could not be sent. You can try again from the Share option.';
 } elseif (isset($_GET['notice']) && $_GET['notice'] === 'converted') {
     $statusNotice = 'Converted quotations cannot be edited.';
 }
@@ -82,7 +88,7 @@ include('header.php');
 ?>
 <title>Quotation <?php echo Quotation::escape($quotation['quotation_no']); ?></title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
-<link rel="stylesheet" href="css/quotation.css">
+<link rel="stylesheet" href="css/quotation.css?v=<?php echo filemtime(__DIR__ . '/css/quotation.css'); ?>">
 </head>
 
 <body class="quotation-body">
@@ -139,7 +145,18 @@ include('header.php');
                             <div class="label">Valid Until</div>
                             <div class="value"><?php echo date('d M Y', strtotime((string) $quotation['valid_until'])); ?></div>
                             <div class="label">Status</div>
-                            <div class="value mb-0"><?php echo Quotation::escape($status); ?></div>
+                            <div class="value<?php echo (empty($quotation['accepted_at']) && empty($quotation['rejected_at'])) ? ' mb-0' : ''; ?>"><?php echo Quotation::escape($status); ?></div>
+                            <?php if (!empty($quotation['accepted_at'])): ?>
+                                <div class="label">Accepted On</div>
+                                <div class="value mb-0"><?php echo date('d M Y, h:i A', strtotime((string) $quotation['accepted_at'])); ?></div>
+                            <?php elseif (!empty($quotation['rejected_at'])): ?>
+                                <div class="label">Rejected On</div>
+                                <div class="value<?php echo empty($quotation['rejection_reason']) ? ' mb-0' : ''; ?>"><?php echo date('d M Y, h:i A', strtotime((string) $quotation['rejected_at'])); ?></div>
+                                <?php if (!empty($quotation['rejection_reason'])): ?>
+                                    <div class="label">Rejection Reason</div>
+                                    <div class="value mb-0"><?php echo nl2br(Quotation::escape($quotation['rejection_reason'])); ?></div>
+                                <?php endif; ?>
+                            <?php endif; ?>
                         </div>
                     </div>
                     <div class="col-lg-4 col-md-6 mb-3">
@@ -272,6 +289,11 @@ include('header.php');
                                     </button>
                                 </div>
                                 <div id="statusUpdateAlert" class="small"></div>
+                                <?php if ($status !== 'Accepted'): ?>
+                                    <div class="small quotation-muted mt-1">
+                                        Accepted is recorded only when the customer confirms through the secure email link.
+                                    </div>
+                                <?php endif; ?>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -293,7 +315,7 @@ include('header.php');
                                 </button>
                                 <div id="convertQuotationAlert" class="small mt-2"></div>
                             <?php else: ?>
-                                <p class="mb-0 quotation-muted">Set the status to <strong>Accepted</strong> before converting this quotation to an invoice.</p>
+                                <p class="mb-0 quotation-muted">The customer must accept this quotation through the secure email link before it can be converted to an invoice.</p>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -336,6 +358,14 @@ include('header.php');
                                 <i class="bi bi-envelope"></i> Email (no saved email)
                             </button>
                         <?php endif; ?>
+
+                        <input type="email" id="shareQuotationEmailToView" class="form-control mb-2"
+                            placeholder="Customer email address"
+                            value="<?php echo Quotation::escape((string) ($quotation['customer_email'] ?? '')); ?>">
+                        <button type="button" class="btn btn-primary btn-block mb-2" id="sendQuotationEmailView">
+                            <i class="bi bi-send"></i> Send Email with Accept / Reject Links
+                        </button>
+                        <div id="sendQuotationEmailAlertView" class="small mb-2"></div>
 
                         <a href="quotation_pdf.php?id=<?php echo $quotationId; ?>&download=1"
                             class="btn btn-outline-dark btn-block mb-2">
@@ -400,6 +430,66 @@ include('header.php');
                 } else {
                     fallback();
                 }
+            });
+        }
+
+        var sendEmailButton = document.getElementById('sendQuotationEmailView');
+        if (sendEmailButton) {
+            sendEmailButton.addEventListener('click', function () {
+                var emailInput = document.getElementById('shareQuotationEmailToView');
+                var alertBox = document.getElementById('sendQuotationEmailAlertView');
+                var toEmail = emailInput ? emailInput.value.trim() : '';
+                if (!toEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(toEmail)) {
+                    if (alertBox) {
+                        alertBox.className = 'small mb-2 text-danger';
+                        alertBox.textContent = 'Please enter a valid customer email address.';
+                    }
+                    return;
+                }
+
+                sendEmailButton.disabled = true;
+                sendEmailButton.innerHTML = '<i class="bi bi-send"></i> Sending...';
+                if (alertBox) {
+                    alertBox.className = 'small mb-2';
+                    alertBox.textContent = '';
+                }
+
+                $.ajax({
+                    url: 'action.php',
+                    type: 'POST',
+                    dataType: 'json',
+                    data: {
+                        action: 'send_quotation_email',
+                        quotation_id: quotationId,
+                        to_email: toEmail,
+                        csrf_token: csrfToken
+                    }
+                }).done(function (response) {
+                    if (response && Number(response.status) === 1) {
+                        if (alertBox) {
+                            alertBox.className = 'small mb-2 text-success';
+                            alertBox.textContent = response.message || 'Quotation email sent successfully.';
+                        }
+                        window.setTimeout(function () {
+                            window.location.href = 'quotation_view.php?id=' + encodeURIComponent(quotationId) + '&sent=1';
+                        }, 700);
+                    } else {
+                        if (alertBox) {
+                            alertBox.className = 'small mb-2 text-danger';
+                            alertBox.textContent = (response && response.message) || 'Unable to send quotation email.';
+                        }
+                        sendEmailButton.disabled = false;
+                        sendEmailButton.innerHTML = '<i class="bi bi-send"></i> Send Email with Accept / Reject Links';
+                    }
+                }).fail(function (xhr) {
+                    if (alertBox) {
+                        alertBox.className = 'small mb-2 text-danger';
+                        alertBox.textContent = (xhr.responseJSON && xhr.responseJSON.message) ||
+                            'Unable to send quotation email.';
+                    }
+                    sendEmailButton.disabled = false;
+                    sendEmailButton.innerHTML = '<i class="bi bi-send"></i> Send Email with Accept / Reject Links';
+                });
             });
         }
 

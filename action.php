@@ -151,6 +151,21 @@ if (isset($_POST['action']) && $_POST['action'] === 'delete_invoice' && isset($_
     sendJsonAndExit($result ? 1 : 0, $result ? 'Invoice deleted successfully.' : 'Failed to delete invoice.');
 }
 
+if (isset($_POST['action']) && $_POST['action'] === 'send_quotation_email') {
+    requireQuotationCsrf();
+    $quotationId = intval($_POST['quotation_id'] ?? 0);
+    if ($quotationId <= 0) {
+        sendJsonAndExit(0, 'Invalid quotation ID.');
+    }
+
+    $quotationService = new Quotation();
+    $result = $quotationService->sendQuotationEmail($quotationId, trim((string) ($_POST['to_email'] ?? '')));
+    sendJsonAndExit(
+        !empty($result['ok']) ? 1 : 0,
+        (string) ($result['message'] ?? 'Unable to send the quotation email.')
+    );
+}
+
 if (isset($_POST['action']) && $_POST['action'] === 'delete_quotation') {
     requireQuotationCsrf();
     $quotationId = intval($_POST['id'] ?? 0);

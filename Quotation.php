@@ -116,8 +116,10 @@ class Quotation
     public static function allowedTransitions(string $current): array
     {
         $map = [
-            'Draft' => ['Draft', 'Sent', 'Accepted', 'Rejected', 'Expired'],
-            'Sent' => ['Sent', 'Accepted', 'Rejected', 'Expired'],
+            // Accepted is intentionally not a manual transition. It may only
+            // be set by the customer through the secure acceptance link.
+            'Draft' => ['Draft', 'Sent', 'Rejected', 'Expired'],
+            'Sent' => ['Sent', 'Rejected', 'Expired'],
             'Accepted' => ['Accepted', 'Rejected'],
             'Rejected' => ['Rejected', 'Draft', 'Sent'],
             'Expired' => ['Expired', 'Draft', 'Sent'],
@@ -312,7 +314,9 @@ class Quotation
         }
 
         $status = trim((string) ($post['status'] ?? 'Draft'));
-        $allowedCreateStatuses = ['Draft', 'Sent'];
+        // A newly created quotation always starts as Draft. Manual creation
+        // can never jump straight to Sent, Accepted or Rejected.
+        $allowedCreateStatuses = ['Draft'];
         if (!in_array($status, self::STATUSES, true)
             || $status === 'Converted'
             || (!$isUpdate && !in_array($status, $allowedCreateStatuses, true))) {
@@ -823,6 +827,589 @@ class Quotation
         return $items;
     }
 
+    /**
+     * Latest saved details for each customer this user has quoted or
+     * invoiced before. Used only to power the customer-name suggestion
+     * dropdown. Quotation details win when the same name exists in both
+     * sources because invoice records do not store phone/email.
+     */
+    public function getCustomerSuggestions(int $limit = 100): array
+    {
+        $userId = $this->currentUserId();
+        if ($userId <= 0) {
+            return [];
+        }
+        $limit = max(1, min(200, $limit));
+
+        $stmt = $this->dbConnect->prepare(
+            "SELECT q.customer_name, q.customer_phone, q.customer_email, q.customer_address
+             FROM {$this->quotationTable} q
+             INNER JOIN (
+                 SELECT customer_name, MAX(id) AS latest_id
+                 FROM {$this->quotationTable}
+                 WHERE user_id = ? AND TRIM(customer_name) <> ''
+                 GROUP BY customer_name
+             ) latest ON latest.latest_id = q.id
+             WHERE q.user_id = ?
+             ORDER BY q.id DESC
+             LIMIT ?"
+        );
+        $stmt->bind_param('iii', $userId, $userId, $limit);
+        $stmt->execute();
+        $quotationCustomers = $this->fetchAll($stmt);
+        $stmt->close();
+
+        $invoiceStmt = $this->dbConnect->prepare(
+            "SELECT i.receiver_name AS customer_name, i.receiver_address AS customer_address
+             FROM {$this->invoiceOrderTable} i
+             INNER JOIN (
+                 SELECT receiver_name, MAX(id) AS latest_id
+                 FROM {$this->invoiceOrderTable}
+                 WHERE user_id = ? AND TRIM(receiver_name) <> ''
+                 GROUP BY receiver_name
+             ) latest ON latest.latest_id = i.id
+             WHERE i.user_id = ?
+             ORDER BY i.id DESC
+             LIMIT ?"
+        );
+        $invoiceStmt->bind_param('iii', $userId, $userId, $limit);
+        $invoiceStmt->execute();
+        $invoiceCustomers = $this->fetchAll($invoiceStmt);
+        $invoiceStmt->close();
+
+        $customers = [];
+        $byName = [];
+        foreach ($quotationCustomers as $customer) {
+            $key = mb_strtolower(trim((string) ($customer['customer_name'] ?? '')));
+            if ($key === '') {
+                continue;
+            }
+            $customers[] = [
+                'customer_name' => $customer['customer_name'] ?? '',
+                'customer_phone' => $customer['customer_phone'] ?? '',
+                'customer_email' => $customer['customer_email'] ?? '',
+                'customer_address' => $customer['customer_address'] ?? '',
+            ];
+            $byName[$key] = true;
+        }
+
+        foreach ($invoiceCustomers as $customer) {
+            $key = mb_strtolower(trim((string) ($customer['customer_name'] ?? '')));
+            if ($key === '' || isset($byName[$key])) {
+                continue;
+            }
+            $customers[] = [
+                'customer_name' => $customer['customer_name'] ?? '',
+                'customer_phone' => '',
+                'customer_email' => '',
+                'customer_address' => $customer['customer_address'] ?? '',
+            ];
+            $byName[$key] = true;
+        }
+
+        return array_slice($customers, 0, $limit);
+    }
+
+    /* ---------------------------------------------------------------------
+     * Secure customer response links
+     * ------------------------------------------------------------------ */
+
+    /**
+     * Return the quotation's persistent public token, creating it once.
+     * The token is only ever exposed through the authenticated email/share
+     * flow and the customer-facing response page.
+     */
+    public function ensurePublicToken(int $quotationId): string
+    {
+        $userId = $this->currentUserId();
+        if ($userId <= 0 || $quotationId <= 0) {
+            throw new RuntimeException('Quotation not found.');
+        }
+
+        $stmt = $this->dbConnect->prepare(
+            "SELECT public_token FROM {$this->quotationTable} WHERE id = ? AND user_id = ? LIMIT 1"
+        );
+        $stmt->bind_param('ii', $quotationId, $userId);
+        $stmt->execute();
+        $row = $this->fetchOne($stmt);
+        $stmt->close();
+
+        if (empty($row)) {
+            throw new InvalidArgumentException('Quotation not found.');
+        }
+        if (!empty($row['public_token']) && preg_match('/^[a-f0-9]{64}$/', (string) $row['public_token'])) {
+            return (string) $row['public_token'];
+        }
+
+        for ($attempt = 0; $attempt < 5; $attempt++) {
+            $token = bin2hex(random_bytes(32));
+            try {
+                $update = $this->dbConnect->prepare(
+                    "UPDATE {$this->quotationTable}
+                     SET public_token = ?
+                     WHERE id = ? AND user_id = ?
+                       AND (public_token IS NULL OR public_token = '')"
+                );
+                $update->bind_param('sii', $token, $quotationId, $userId);
+                $update->execute();
+                $updated = $update->affected_rows;
+                $update->close();
+            } catch (Throwable $exception) {
+                // A token collision is practically impossible; retry with a
+                // fresh value instead of failing the email outright.
+                continue;
+            }
+
+            if ($updated > 0) {
+                return $token;
+            }
+
+            // Another request may have stored a token first.
+            $check = $this->dbConnect->prepare(
+                "SELECT public_token FROM {$this->quotationTable} WHERE id = ? AND user_id = ? LIMIT 1"
+            );
+            $check->bind_param('ii', $quotationId, $userId);
+            $check->execute();
+            $existing = $this->fetchOne($check);
+            $check->close();
+            if (!empty($existing['public_token'])
+                && preg_match('/^[a-f0-9]{64}$/', (string) $existing['public_token'])) {
+                return (string) $existing['public_token'];
+            }
+        }
+
+        throw new RuntimeException('Could not create a secure quotation link.');
+    }
+
+    /**
+     * Fetch a quotation by its public token. This is the only read method
+     * that deliberately does not require a logged-in user id.
+     */
+    public function getQuotationByToken(string $token): array
+    {
+        $token = strtolower(trim($token));
+        if (!preg_match('/^[a-f0-9]{64}$/', $token)) {
+            return [];
+        }
+
+        $stmt = $this->dbConnect->prepare(
+            "SELECT * FROM {$this->quotationTable} WHERE public_token = ? LIMIT 1"
+        );
+        $stmt->bind_param('s', $token);
+        $stmt->execute();
+        $row = $this->fetchOne($stmt);
+        $stmt->close();
+
+        if (empty($row)) {
+            return [];
+        }
+
+        if (in_array($row['status'], ['Draft', 'Sent'], true)
+            && !empty($row['valid_until'])
+            && $row['valid_until'] < date('Y-m-d')
+            && empty($row['converted_invoice_id'])
+        ) {
+            $update = $this->dbConnect->prepare(
+                "UPDATE {$this->quotationTable}
+                 SET status = 'Expired'
+                 WHERE id = ?
+                   AND status IN ('Draft', 'Sent')
+                   AND converted_invoice_id IS NULL"
+            );
+            $update->bind_param('i', $row['id']);
+            $update->execute();
+            $update->close();
+            $row['status'] = 'Expired';
+        }
+
+        return $row;
+    }
+
+    /**
+     * Apply an explicit customer accept/reject decision.
+     *
+     * @return array{ok:bool,message:string,already?:bool,status?:string}
+     */
+    public function respondToQuotation(string $token, string $decision, string $reason = ''): array
+    {
+        $token = strtolower(trim($token));
+        if (!preg_match('/^[a-f0-9]{64}$/', $token)) {
+            return ['ok' => false, 'message' => 'This quotation link is invalid or has expired.'];
+        }
+
+        $decision = strtolower(trim($decision));
+        if (!in_array($decision, ['accept', 'reject'], true)) {
+            return ['ok' => false, 'message' => 'Please choose whether to accept or reject this quotation.'];
+        }
+
+        $reason = trim($reason);
+        if (mb_strlen($reason) > 1000) {
+            return ['ok' => false, 'message' => 'The rejection reason must not exceed 1000 characters.'];
+        }
+
+        $this->dbConnect->begin_transaction();
+        try {
+            $stmt = $this->dbConnect->prepare(
+                "SELECT * FROM {$this->quotationTable} WHERE public_token = ? LIMIT 1 FOR UPDATE"
+            );
+            $stmt->bind_param('s', $token);
+            $stmt->execute();
+            $quotation = $this->fetchOne($stmt);
+            $stmt->close();
+
+            if (empty($quotation)) {
+                $this->dbConnect->rollback();
+                return ['ok' => false, 'message' => 'This quotation link is invalid or has expired.'];
+            }
+
+            $status = (string) $quotation['status'];
+            if ($status === 'Converted') {
+                $this->dbConnect->rollback();
+                return ['ok' => false, 'message' => 'This quotation has already been converted and can no longer be changed.'];
+            }
+            if ($status === 'Accepted') {
+                $this->dbConnect->rollback();
+                return [
+                    'ok' => false,
+                    'already' => true,
+                    'status' => 'Accepted',
+                    'message' => 'This quotation has already been accepted.',
+                ];
+            }
+            if ($status === 'Rejected') {
+                $this->dbConnect->rollback();
+                return [
+                    'ok' => false,
+                    'already' => true,
+                    'status' => 'Rejected',
+                    'message' => 'This quotation has already been rejected.',
+                ];
+            }
+
+            $isExpired = $status === 'Expired'
+                || (!empty($quotation['valid_until']) && $quotation['valid_until'] < date('Y-m-d'));
+
+            if ($isExpired) {
+                if ($status !== 'Expired') {
+                    $expire = $this->dbConnect->prepare(
+                        "UPDATE {$this->quotationTable}
+                         SET status = 'Expired'
+                         WHERE id = ? AND status IN ('Draft', 'Sent') AND converted_invoice_id IS NULL"
+                    );
+                    $expire->bind_param('i', $quotation['id']);
+                    $expire->execute();
+                    $expire->close();
+                }
+                $this->dbConnect->commit();
+                return [
+                    'ok' => false,
+                    'status' => 'Expired',
+                    'message' => 'This quotation expired on '
+                        . date('d M Y', strtotime((string) $quotation['valid_until']))
+                        . ' and can no longer be accepted or rejected.',
+                ];
+            }
+
+            if (!in_array($status, ['Draft', 'Sent'], true)) {
+                $this->dbConnect->rollback();
+                return ['ok' => false, 'message' => 'This quotation cannot be updated.'];
+            }
+
+            if ($decision === 'accept') {
+                $update = $this->dbConnect->prepare(
+                    "UPDATE {$this->quotationTable}
+                     SET status = 'Accepted', accepted_at = NOW(),
+                         rejected_at = NULL, rejection_reason = NULL
+                     WHERE id = ? AND status IN ('Draft', 'Sent')"
+                );
+                $update->bind_param('i', $quotation['id']);
+                $update->execute();
+                $changed = $update->affected_rows;
+                $update->close();
+
+                if ($changed <= 0) {
+                    $this->dbConnect->rollback();
+                    return ['ok' => false, 'message' => 'This quotation was updated by someone else. Please refresh the link.'];
+                }
+                $this->dbConnect->commit();
+                return [
+                    'ok' => true,
+                    'status' => 'Accepted',
+                    'message' => 'Thank you. The quotation has been accepted successfully.',
+                ];
+            }
+
+            $update = $this->dbConnect->prepare(
+                "UPDATE {$this->quotationTable}
+                 SET status = 'Rejected', rejected_at = NOW(), rejection_reason = ?,
+                     accepted_at = NULL
+                 WHERE id = ? AND status IN ('Draft', 'Sent')"
+            );
+            $update->bind_param('si', $reason, $quotation['id']);
+            $update->execute();
+            $changed = $update->affected_rows;
+            $update->close();
+
+            if ($changed <= 0) {
+                $this->dbConnect->rollback();
+                return ['ok' => false, 'message' => 'This quotation was updated by someone else. Please refresh the link.'];
+            }
+            $this->dbConnect->commit();
+            return [
+                'ok' => true,
+                'status' => 'Rejected',
+                'message' => 'Thank you. The quotation has been rejected successfully.',
+            ];
+        } catch (Throwable $exception) {
+            $this->dbConnect->rollback();
+            throw $exception;
+        }
+    }
+
+    /**
+     * Mark a quotation Sent only after the email was actually delivered to
+     * the mail server. Existing Accepted/Rejected/Converted quotes and
+     * already-expired quotes are never overwritten.
+     */
+    public function recordEmailSent(int $quotationId): bool
+    {
+        $userId = $this->currentUserId();
+        if ($userId <= 0 || $quotationId <= 0) {
+            return false;
+        }
+
+        $stmt = $this->dbConnect->prepare(
+            "UPDATE {$this->quotationTable}
+             SET status = 'Sent'
+             WHERE id = ? AND user_id = ?
+               AND status = 'Draft'
+               AND converted_invoice_id IS NULL
+               AND valid_until >= CURDATE()"
+        );
+        $stmt->bind_param('ii', $quotationId, $userId);
+        $stmt->execute();
+        $stmt->close();
+        return true;
+    }
+
+    public static function publicBaseUrl(): string
+    {
+        $configured = trim((string) getenv('APP_URL'));
+        if ($configured !== '') {
+            return rtrim($configured, '/');
+        }
+
+        $https = (!empty($_SERVER['HTTPS']) && strtolower((string) $_SERVER['HTTPS']) !== 'off')
+            || (isset($_SERVER['HTTP_X_FORWARDED_PROTO'])
+                && strtolower((string) $_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https');
+        $scheme = $https ? 'https' : 'http';
+        $host = (string) ($_SERVER['HTTP_HOST'] ?? 'localhost');
+        $host = preg_replace('/[^A-Za-z0-9.\-:\[\]]/', '', $host);
+        if ($host === '') {
+            $host = 'localhost';
+        }
+
+        $script = str_replace('\\', '/', (string) ($_SERVER['SCRIPT_NAME'] ?? ''));
+        $directory = rtrim(str_replace('\\', '/', dirname($script)), '/');
+        if ($directory === '.' || $directory === '/') {
+            $directory = '';
+        }
+
+        return $scheme . '://' . $host . $directory;
+    }
+
+    /**
+     * Send a quotation email using the existing SMTP configuration.
+     * Returns an array so both the AJAX share action and the create page can
+     * reuse exactly the same sending behaviour.
+     *
+     * @return array{ok:bool,message:string}
+     */
+    public function sendQuotationEmail(int $quotationId, string $toEmail = ''): array
+    {
+        $userId = $this->currentUserId();
+        if ($userId <= 0) {
+            return ['ok' => false, 'message' => 'Your session has expired. Please log in again.'];
+        }
+
+        $quotation = $this->getQuotation($quotationId);
+        if (empty($quotation)) {
+            return ['ok' => false, 'message' => 'Quotation not found.'];
+        }
+        if (($quotation['status'] ?? '') === 'Converted') {
+            return ['ok' => false, 'message' => 'Converted quotations cannot be emailed.'];
+        }
+
+        $toEmail = trim($toEmail);
+        if ($toEmail === '') {
+            $toEmail = trim((string) ($quotation['customer_email'] ?? ''));
+        }
+        if (!filter_var($toEmail, FILTER_VALIDATE_EMAIL)) {
+            return ['ok' => false, 'message' => 'Please provide a valid customer email address.'];
+        }
+
+        require_once __DIR__ . '/mail_config.php';
+        if (SMTP_USER === '' || SMTP_PASSWORD === '') {
+            return ['ok' => false, 'message' => 'Email is not configured. Please set the SMTP settings and try again.'];
+        }
+
+        $items = $this->getQuotationItems($quotationId);
+        if (empty($items)) {
+            return ['ok' => false, 'message' => 'This quotation has no items to email.'];
+        }
+
+        $token = $this->ensurePublicToken($quotationId);
+        $baseUrl = self::publicBaseUrl();
+        $acceptUrl = $baseUrl . '/quotation_accept.php?token=' . rawurlencode($token) . '&response=accept';
+        $rejectUrl = $baseUrl . '/quotation_accept.php?token=' . rawurlencode($token) . '&response=reject';
+
+        $subject = 'Quotation ' . (string) ($quotation['quotation_no'] ?? '') . ' from ' . SMTP_FROM_NAME;
+        $htmlBody = $this->buildQuotationEmailHtml($quotation, $items, $acceptUrl, $rejectUrl);
+        $plainBody = 'Dear ' . (string) ($quotation['customer_name'] ?? '') . ",\n\n"
+            . 'Please review quotation ' . (string) ($quotation['quotation_no'] ?? '') . ".\n"
+            . 'Amount: ' . self::currencySymbol((string) ($quotation['currency'] ?? 'INR')) . ' '
+            . number_format((float) ($quotation['grand_total'] ?? 0), 2) . "\n"
+            . 'Valid until: ' . (!empty($quotation['valid_until'])
+                ? date('d M Y', strtotime((string) $quotation['valid_until'])) : '') . "\n\n"
+            . "Accept this quotation:\n" . $acceptUrl . "\n\n"
+            . "Reject this quotation:\n" . $rejectUrl . "\n\n"
+            . "Thank you,\n" . SMTP_FROM_NAME;
+
+        try {
+            require_once __DIR__ . '/vendor/autoload.php';
+            $mail = new \PHPMailer\PHPMailer\PHPMailer(true);
+            $mail->isSMTP();
+            $mail->Host = SMTP_HOST;
+            $mail->SMTPAuth = true;
+            $mail->Username = SMTP_USER;
+            $mail->Password = SMTP_PASSWORD;
+            $mail->SMTPSecure = SMTP_SECURE;
+            $mail->Port = SMTP_PORT;
+            $mail->SMTPAutoTLS = true;
+            $mail->CharSet = 'UTF-8';
+            $mail->setFrom(SMTP_USER, SMTP_FROM_NAME);
+            $mail->addAddress($toEmail);
+            $mail->Subject = $subject;
+            $mail->isHTML(true);
+            $mail->Body = $htmlBody;
+            $mail->AltBody = $plainBody;
+            $mail->send();
+        } catch (\PHPMailer\PHPMailer\Exception $exception) {
+            return ['ok' => false, 'message' => 'Unable to send the quotation email. Please check the email configuration and try again.'];
+        } catch (\Throwable $exception) {
+            return ['ok' => false, 'message' => 'Unable to send the quotation email. Please check the email configuration and try again.'];
+        }
+
+        // Only after a successful send. This never overwrites an Accepted,
+        // Rejected or already Expired quotation.
+        $this->recordEmailSent($quotationId);
+
+        return ['ok' => true, 'message' => 'Quotation email sent successfully.'];
+    }
+
+    public function buildQuotationEmailHtml(array $quotation, array $items, string $acceptUrl, string $rejectUrl): string
+    {
+        $e = static function ($value): string {
+            return self::escape($value);
+        };
+        $currency = (string) ($quotation['currency'] ?? 'INR');
+        $symbol = self::currencySymbol($currency);
+        $quotationDate = !empty($quotation['quotation_date'])
+            ? date('d M Y', strtotime((string) $quotation['quotation_date'])) : '';
+        $validUntil = !empty($quotation['valid_until'])
+            ? date('d M Y', strtotime((string) $quotation['valid_until'])) : '';
+
+        $rows = '';
+        foreach ($items as $index => $item) {
+            $description = trim((string) ($item['product_description'] ?? ''));
+            $rows .= '<tr>'
+                . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">' . ($index + 1) . '</td>'
+                . '<td style="padding:8px;border:1px solid #e2e8f0;">'
+                . '<strong>' . $e($item['product_name'] ?? '') . '</strong>'
+                . ($description !== '' ? '<div style="color:#64748b;font-size:12px;margin-top:4px;">' . nl2br($e($description)) . '</div>' : '')
+                . '</td>'
+                . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">'
+                . rtrim(rtrim(number_format((float) ($item['quantity'] ?? 0), 2, '.', ''), '0'), '.') . '</td>'
+                . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:right;">'
+                . $e($symbol) . ' ' . number_format((float) ($item['unit_price'] ?? 0), 2) . '</td>'
+                . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:right;">'
+                . $e($symbol) . ' ' . number_format((float) ($item['discount'] ?? 0), 2) . '</td>'
+                . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">'
+                . number_format((float) ($item['tax_percent'] ?? 0), 2) . '%</td>'
+                . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:right;">'
+                . $e($symbol) . ' ' . number_format((float) ($item['line_total'] ?? 0), 2) . '</td>'
+                . '</tr>';
+        }
+
+        $notes = trim((string) ($quotation['notes'] ?? ''));
+        $terms = trim((string) ($quotation['terms_conditions'] ?? ''));
+
+        $html = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
+            . '<title>Quotation ' . $e($quotation['quotation_no'] ?? '') . '</title></head>'
+            . '<body style="margin:0;padding:0;background:#f1f5f9;font-family:Arial,Helvetica,sans-serif;color:#1e293b;">'
+            . '<div style="max-width:720px;margin:0 auto;padding:24px;">'
+            . '<div style="background:#1f4e79;color:#ffffff;padding:20px 24px;border-radius:8px 8px 0 0;">'
+            . '<h1 style="margin:0;font-size:22px;">Quotation ' . $e($quotation['quotation_no'] ?? '') . '</h1>'
+            . '<p style="margin:6px 0 0;font-size:14px;">Pavitha Consultancy Services OPC Pvt Ltd.</p>'
+            . '</div>'
+            . '<div style="background:#ffffff;padding:24px;border:1px solid #e2e8f0;border-top:0;border-radius:0 0 8px 8px;">'
+            . '<p style="margin:0 0 16px;font-size:15px;">Dear ' . $e($quotation['customer_name'] ?? '') . ',</p>'
+            . '<p style="margin:0 0 18px;font-size:14px;line-height:1.6;">Please review the following quotation. '
+            . 'You can accept or reject it using the buttons at the end of this email.</p>'
+            . '<table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:18px;">'
+            . '<tr><td style="padding:5px 0;color:#64748b;width:35%;">Customer</td><td style="padding:5px 0;">' . $e($quotation['customer_name'] ?? '') . '</td></tr>'
+            . '<tr><td style="padding:5px 0;color:#64748b;">Email</td><td style="padding:5px 0;">' . $e($quotation['customer_email'] ?? '') . '</td></tr>'
+            . '<tr><td style="padding:5px 0;color:#64748b;">Phone</td><td style="padding:5px 0;">' . $e($quotation['customer_phone'] ?? '') . '</td></tr>'
+            . '<tr><td style="padding:5px 0;color:#64748b;">Quotation Date</td><td style="padding:5px 0;">' . $e($quotationDate) . '</td></tr>'
+            . '<tr><td style="padding:5px 0;color:#64748b;">Valid Until</td><td style="padding:5px 0;">' . $e($validUntil) . '</td></tr>'
+            . '<tr><td style="padding:5px 0;color:#64748b;">Amount</td><td style="padding:5px 0;font-weight:bold;font-size:16px;">'
+            . $e($symbol) . ' ' . number_format((float) ($quotation['grand_total'] ?? 0), 2) . '</td></tr>'
+            . '</table>'
+            . '<h2 style="font-size:16px;margin:0 0 8px;color:#1f4e79;">Quotation Details</h2>'
+            . '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px;">'
+            . '<thead><tr style="background:#1f4e79;color:#ffffff;">'
+            . '<th style="padding:8px;border:1px solid #1f4e79;">#</th>'
+            . '<th style="padding:8px;border:1px solid #1f4e79;text-align:left;">Product / Service</th>'
+            . '<th style="padding:8px;border:1px solid #1f4e79;">Qty</th>'
+            . '<th style="padding:8px;border:1px solid #1f4e79;">Unit Price</th>'
+            . '<th style="padding:8px;border:1px solid #1f4e79;">Discount</th>'
+            . '<th style="padding:8px;border:1px solid #1f4e79;">Tax %</th>'
+            . '<th style="padding:8px;border:1px solid #1f4e79;">Line Total</th>'
+            . '</tr></thead><tbody>' . $rows . '</tbody></table>'
+            . '<table style="width:100%;border-collapse:collapse;font-size:14px;margin-left:auto;max-width:320px;">'
+            . '<tr><td style="padding:4px 0;">Subtotal</td><td style="padding:4px 0;text-align:right;">' . $e($symbol) . ' ' . number_format((float) ($quotation['subtotal'] ?? 0), 2) . '</td></tr>'
+            . '<tr><td style="padding:4px 0;">Total Discount</td><td style="padding:4px 0;text-align:right;">' . $e($symbol) . ' ' . number_format((float) ($quotation['total_discount'] ?? 0), 2) . '</td></tr>'
+            . '<tr><td style="padding:4px 0;">Tax / GST</td><td style="padding:4px 0;text-align:right;">' . $e($symbol) . ' ' . number_format((float) ($quotation['tax_amount'] ?? 0), 2) . '</td></tr>'
+            . '<tr><td style="padding:8px 0;font-weight:bold;border-top:2px solid #1f4e79;">Grand Total</td>'
+            . '<td style="padding:8px 0;font-weight:bold;text-align:right;border-top:2px solid #1f4e79;">' . $e($symbol) . ' ' . number_format((float) ($quotation['grand_total'] ?? 0), 2) . '</td></tr>'
+            . '</table>';
+
+        if ($notes !== '') {
+            $html .= '<div style="margin-top:18px;"><strong style="color:#1f4e79;">Notes</strong><div style="font-size:13px;line-height:1.6;">' . nl2br($e($notes)) . '</div></div>';
+        }
+        if ($terms !== '') {
+            $html .= '<div style="margin-top:14px;"><strong style="color:#1f4e79;">Terms &amp; Conditions</strong><div style="font-size:13px;line-height:1.6;">' . nl2br($e($terms)) . '</div></div>';
+        }
+
+        $html .= '<div style="margin-top:26px;padding:18px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">'
+            . '<h2 style="font-size:16px;margin:0 0 8px;color:#1f4e79;">Your Response</h2>'
+            . '<p style="margin:0 0 14px;font-size:14px;line-height:1.6;">Please confirm your decision. This quotation is valid until '
+            . $e($validUntil) . '.</p>'
+            . '<p style="margin:0 0 14px;">'
+            . '<a href="' . $e($acceptUrl) . '" style="display:inline-block;background:#198754;color:#ffffff;text-decoration:none;padding:11px 20px;border-radius:6px;font-weight:bold;margin:0 8px 8px 0;">Accept Quotation</a>'
+            . '<a href="' . $e($rejectUrl) . '" style="display:inline-block;background:#dc3545;color:#ffffff;text-decoration:none;padding:11px 20px;border-radius:6px;font-weight:bold;margin:0 8px 8px 0;">Reject Quotation</a>'
+            . '</p>'
+            . '<p style="margin:0;font-size:12px;color:#64748b;line-height:1.5;">These links are unique to this quotation. '
+            . 'If the buttons do not work, copy and paste the secure link from this email into your browser.</p>'
+            . '</div>'
+            . '<p style="margin:20px 0 0;font-size:12px;color:#64748b;line-height:1.5;">Quotation No: '
+            . $e($quotation['quotation_no'] ?? '') . '<br>Valid Until: ' . $e($validUntil) . '<br>'
+            . 'Pavitha Consultancy Services OPC Pvt Ltd.</p>'
+            . '</div></div></body></html>';
+
+        return $html;
+    }
+
     /* ---------------------------------------------------------------------
      * Status and conversion
      * ------------------------------------------------------------------ */
@@ -838,6 +1425,11 @@ class Quotation
         }
         if ($quotation['status'] === 'Converted') {
             throw new InvalidArgumentException('Converted quotations cannot change status.');
+        }
+        // Accepted can only be recorded by the customer response link, so a
+        // manual dropdown/API change can never fabricate an acceptance event.
+        if ($newStatus === 'Accepted' && $quotation['status'] !== 'Accepted') {
+            throw new InvalidArgumentException('Quotations can only be accepted by the customer through the secure acceptance link.');
         }
         if (!in_array($newStatus, self::allowedTransitions($quotation['status']), true)) {
             throw new InvalidArgumentException('That status change is not allowed.');
