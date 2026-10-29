@@ -1,15 +1,87 @@
 <?php
 require_once 'session.php';
 ensureSessionStarted();
-include('header.php');
 require_once 'Invoice.php';
+require_once 'Quotation.php';
 $invoice = new Invoice();
 $invoice->checkLoggedIn();
 
-if (!empty($_POST['receiverName']) && $_POST['receiverName']) {
-   $invoice->saveInvoice($_POST);
-   header("Location:main.php?page=invoice_list");
+$quotationService = new Quotation();
+$sourceQuotationId = intval($_GET['from_quotation'] ?? $_POST['source_quotation_id'] ?? 0);
+$sourceQuotation = [];
+$sourceItems = [];
+
+if ($sourceQuotationId > 0) {
+    $sourceQuotation = $quotationService->getQuotation($sourceQuotationId);
+    if (empty($sourceQuotation)
+        || ($sourceQuotation['status'] ?? '') !== 'Accepted'
+        || !empty($sourceQuotation['converted_invoice_id'])) {
+        header('Location: quotation_view.php?id=' . $sourceQuotationId . '&notice=convert_unavailable');
+        exit;
+    }
+    $sourceItems = $quotationService->getQuotationItems($sourceQuotationId);
 }
+
+if (!empty($_POST['receiverName']) && $_POST['receiverName']) {
+    $invoiceId = $invoice->saveInvoice($_POST);
+    $submittedQuotationId = intval($_POST['source_quotation_id'] ?? 0);
+    if ($submittedQuotationId > 0 && $invoiceId > 0) {
+        // The quotation becomes Converted only after the invoice is saved.
+        $quotationService->markConverted($submittedQuotationId, $invoiceId);
+    }
+    header("Location:main.php?page=invoice_list");
+    exit;
+}
+
+$prefill = [
+    'receiverName' => '',
+    'receiverAddress' => '',
+    'gstNo' => '',
+    'panNo' => '',
+    'supply' => '',
+    'currency' => 'INR',
+    'gst_type' => 'with_gst',
+    'notes' => '',
+];
+$prefillItems = [];
+
+if (!empty($sourceQuotation)) {
+    $prefill = [
+        'receiverName' => (string) ($sourceQuotation['customer_name'] ?? ''),
+        'receiverAddress' => (string) ($sourceQuotation['customer_address'] ?? ''),
+        'gstNo' => '',
+        'panNo' => '',
+        'supply' => '',
+        'currency' => in_array(($sourceQuotation['currency'] ?? 'INR'), ['INR', 'USD'], true)
+            ? (string) $sourceQuotation['currency'] : 'INR',
+        'gst_type' => ($sourceQuotation['gst_type'] ?? '') === 'with_gst' ? 'with_gst' : 'without_gst',
+        'notes' => (string) ($sourceQuotation['notes'] ?? ''),
+    ];
+
+    foreach ($sourceItems as $sourceItem) {
+        $name = trim((string) ($sourceItem['product_name'] ?? ''));
+        $description = trim((string) ($sourceItem['product_description'] ?? ''));
+        if ($description !== '') {
+            $name .= ' - ' . $description;
+        }
+        $prefillItems[] = [
+            'name' => mb_substr($name, 0, 150),
+            'code' => '998314',
+            'price' => (float) ($sourceItem['unit_price'] ?? 0),
+            'taxable' => (float) ($sourceItem['line_total'] ?? 0),
+        ];
+    }
+}
+
+if (empty($prefillItems)) {
+    $prefillItems[] = ['name' => '', 'code' => '998314', 'price' => '', 'taxable' => ''];
+}
+
+$e = static function ($value): string {
+    return htmlspecialchars((string) $value, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
+};
+
+include('header.php');
 ?>
 <title>Create Invoice</title>
 <script src="js/invoice.js"></script>
@@ -70,7 +142,13 @@ if (!empty($_POST['receiverName']) && $_POST['receiverName']) {
                         <div class="row mb-4">
                             <div class="col-12">
                                 <h2 class="text-primary">Create Invoice</h2>
-
+                                <?php if (!empty($sourceQuotation)): ?>
+                                    <div class="alert alert-info py-2 px-3 mb-0">
+                                        Creating an invoice from quotation
+                                        <strong><?php echo $e($sourceQuotation['quotation_no'] ?? ''); ?></strong>.
+                                        The quotation will be marked as converted only after you save this invoice.
+                                    </div>
+                                <?php endif; ?>
                             </div>
                         </div>
 
@@ -86,23 +164,23 @@ if (!empty($_POST['receiverName']) && $_POST['receiverName']) {
                                 <h5 class="text-secondary">To</h5>
                                 <div class="form-group mb-3">
                                     <input type="text" class="form-control" name="receiverName" placeholder="Name"
-                                        autocomplete="off">
+                                        value="<?php echo $e($prefill['receiverName']); ?>" autocomplete="off">
                                 </div>
                                 <div class="form-group mb-3">
                                     <textarea class="form-control" rows="2" name="receiverAddress"
-                                        placeholder="Address"></textarea>
+                                        placeholder="Address"><?php echo $e($prefill['receiverAddress']); ?></textarea>
                                 </div>
                                 <div class="form-group mb-3">
                                     <input type="text" class="form-control" name="gstNo" placeholder="GST No."
-                                        autocomplete="off">
+                                        value="<?php echo $e($prefill['gstNo']); ?>" autocomplete="off">
                                 </div>
                                 <div class="form-group mb-3">
                                     <input type="text" class="form-control" name="panNo" placeholder="PAN No."
-                                        autocomplete="off">
+                                        value="<?php echo $e($prefill['panNo']); ?>" autocomplete="off">
                                 </div>
                                 <div class="form-group mb-3">
                                     <input type="text" class="form-control" name="supply" placeholder="Place of Supply"
-                                        autocomplete="off">
+                                        value="<?php echo $e($prefill['supply']); ?>" autocomplete="off">
                                 </div>
                             </div>
                         </div>
@@ -111,18 +189,20 @@ if (!empty($_POST['receiverName']) && $_POST['receiverName']) {
                             <div class="form-group" style="width: 250px;">
                                 <label for="currency" class="form-label fw-bold text-secondary mb-2">Currency Type :</label>
                                 <select name="currency" id="currency" class="form-select shadow-sm" style="border-radius: 8px;" required>
-                                    <option value="INR" selected>₹ Rupees</option>
-                                    <option value="USD">$ Dollars</option>
+                                    <option value="INR" <?php echo $prefill['currency'] === 'INR' ? 'selected' : ''; ?>>₹ Rupees</option>
+                                    <option value="USD" <?php echo $prefill['currency'] === 'USD' ? 'selected' : ''; ?>>$ Dollars</option>
                                 </select>
                             </div>
 
                             <div class="form-group" id="gst-toggle-wrapper">
                                 <label class="form-label d-block fw-bold text-secondary mb-2">Invoice Type :</label>
                                 <div class="custom-pill-toggle" role="group" aria-label="GST Type">
-                                    <input type="radio" class="btn-check" name="gst_type" id="with_gst" value="with_gst" checked autocomplete="off">
+                                    <input type="radio" class="btn-check" name="gst_type" id="with_gst" value="with_gst"
+                                        <?php echo $prefill['gst_type'] === 'with_gst' ? 'checked' : ''; ?> autocomplete="off">
                                     <label class="btn" for="with_gst">With GST</label>
 
-                                    <input type="radio" class="btn-check" name="gst_type" id="without_gst" value="without_gst" autocomplete="off">
+                                    <input type="radio" class="btn-check" name="gst_type" id="without_gst" value="without_gst"
+                                        <?php echo $prefill['gst_type'] === 'without_gst' ? 'checked' : ''; ?> autocomplete="off">
                                     <label class="btn" for="without_gst">Without GST</label>
                                 </div>
                             </div>
@@ -146,21 +226,33 @@ if (!empty($_POST['receiverName']) && $_POST['receiverName']) {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    <tr>
-                                        <td>
-                                            <div class="custom-control custom-checkbox">
-                                                <input type="checkbox" class="form-check-input itemRow" id="itemRow_1">
-                                            </div>
-                                        </td>
-                                        <td><input type="text" name="productName[]" id="productName_1"
-                                                class="form-control" autocomplete="off"></td>
-                                        <td><input type="text" name="productCode[]" id="productCode_1"
-                                                class="form-control" value="998314" autocomplete="off"></td>
-                                        <td><input type="number" name="price[]" id="price_1" class="form-control price"
-                                                autocomplete="off"></td>
-                                        <td><input type="number" name="taxableValue[]" id="taxableValue_1"
-                                                class="form-control taxableValue" autocomplete="off"></td>
-                                    </tr>
+                                    <?php foreach ($prefillItems as $index => $prefillItem):
+                                        $rowNumber = $index + 1;
+                                        ?>
+                                        <tr>
+                                            <td>
+                                                <div class="custom-control custom-checkbox">
+                                                    <input type="checkbox" class="form-check-input itemRow"
+                                                        id="itemRow_<?php echo $rowNumber; ?>">
+                                                </div>
+                                            </td>
+                                            <td><input type="text" name="productName[]" id="productName_<?php echo $rowNumber; ?>"
+                                                    class="form-control" value="<?php echo $e($prefillItem['name']); ?>"
+                                                    autocomplete="off"></td>
+                                            <td><input type="text" name="productCode[]" id="productCode_<?php echo $rowNumber; ?>"
+                                                    class="form-control" value="<?php echo $e($prefillItem['code']); ?>"
+                                                    autocomplete="off"></td>
+                                            <td><input type="number" name="price[]" id="price_<?php echo $rowNumber; ?>"
+                                                    class="form-control price" step="0.01"
+                                                    value="<?php echo $prefillItem['price'] === '' ? '' : $e($prefillItem['price']); ?>"
+                                                    autocomplete="off"></td>
+                                            <td><input type="number" name="taxableValue[]"
+                                                    id="taxableValue_<?php echo $rowNumber; ?>"
+                                                    class="form-control taxableValue" step="0.01"
+                                                    value="<?php echo $prefillItem['taxable'] === '' ? '' : $e($prefillItem['taxable']); ?>"
+                                                    autocomplete="off"></td>
+                                        </tr>
+                                    <?php endforeach; ?>
                                 </tbody>
                             </table>
                             <div class="d-flex gap-2">
@@ -227,11 +319,15 @@ if (!empty($_POST['receiverName']) && $_POST['receiverName']) {
                         <div class="form-group mb-3">
                             <label>Notes:</label>
                             <textarea class="form-control" rows="3" name="notes" id="notes"
-                                placeholder="Additional Notes"></textarea>
+                                placeholder="Additional Notes"><?php echo $e($prefill['notes']); ?></textarea>
                         </div>
 
                         <div class="form-group text-end">
                             <input type="hidden" value="<?php echo $_SESSION['userId']; ?>" name="userId">
+                            <?php if (!empty($sourceQuotation)): ?>
+                                <input type="hidden" name="source_quotation_id"
+                                    value="<?php echo intval($sourceQuotationId); ?>">
+                            <?php endif; ?>
                             <button type="submit" name="invoice_btn" class="btn btn-success px-3">Save</button>
                             <button type="button" style="background-color: #f05050; color: white;"
                                 class="btn btn-close px-3"

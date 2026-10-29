@@ -343,7 +343,15 @@ class Quotation
         $quantities = $post['quantity'] ?? [];
         $unitPrices = $post['unit_price'] ?? [];
         $discounts = $post['discount'] ?? [];
-        $taxPercents = $post['tax_percent'] ?? [];
+
+        // GST follows the same method as invoice creation: a single
+        // With GST / Without GST choice, then CGST 9% + SGST 9% on the
+        // taxable total. Per-item tax percentages are no longer used.
+        $gstType = ((string) ($post['gst_type'] ?? 'with_gst')) === 'without_gst'
+            ? 'without_gst'
+            : 'with_gst';
+        // Per-item rows keep the combined GST rate for reference only.
+        $itemTaxRate = $gstType === 'with_gst' ? 18.0 : 0.0;
 
         $rowCount = max(
             is_array($names) ? count($names) : 0,
@@ -357,7 +365,6 @@ class Quotation
             $rawQty = trim((string) ($quantities[$i] ?? ''));
             $rawPrice = trim((string) ($unitPrices[$i] ?? ''));
             $rawDiscount = trim((string) ($discounts[$i] ?? '0'));
-            $rawTax = trim((string) ($taxPercents[$i] ?? '0'));
 
             // Skip fully empty rows. A blank template row defaults to a
             // quantity of 1, so that must also count as an empty row.
@@ -378,9 +385,6 @@ class Quotation
             if (!is_numeric($rawDiscount) || floatval($rawDiscount) < 0) {
                 $errors[] = 'Discount must be zero or greater for all items.';
             }
-            if (!is_numeric($rawTax) || floatval($rawTax) < 0 || floatval($rawTax) > 100) {
-                $errors[] = 'Tax percentage must be between 0 and 100.';
-            }
 
             // Round the stored values first so line totals, subtotal and tax
             // always agree with exactly what is written to the database.
@@ -394,8 +398,9 @@ class Quotation
             }
 
             $lineTotal = round(max(0, $gross - $discount), 2);
-            $taxPercent = round(floatval($rawTax), 2);
-            $taxAmount = round($lineTotal * ($taxPercent / 100), 2);
+            // Per-item tax is informational only now; totals use the single
+            // GST choice below, exactly like invoice creation.
+            $itemTaxAmount = round($lineTotal * ($itemTaxRate / 100), 2);
 
             if (mb_strlen($name) > 255) {
                 $errors[] = 'Product or service name is too long.';
@@ -410,9 +415,9 @@ class Quotation
                 'quantity' => $qty,
                 'unit_price' => $price,
                 'discount' => $discount,
-                'tax_percent' => $taxPercent,
+                'tax_percent' => $itemTaxRate,
                 'line_total' => $lineTotal,
-                'tax_amount' => $taxAmount,
+                'tax_amount' => $itemTaxAmount,
             ];
         }
 
@@ -422,18 +427,19 @@ class Quotation
 
         $subtotal = 0.0;
         $totalDiscount = 0.0;
-        $taxAmount = 0.0;
         foreach ($items as $item) {
             // line_total already has the discount removed; add it back so
             // subtotal - total_discount equals the sum of the line totals.
             $subtotal += $item['line_total'] + $item['discount'];
             $totalDiscount += $item['discount'];
-            $taxAmount += $item['tax_amount'];
         }
         $subtotal = round($subtotal, 2);
         $totalDiscount = round($totalDiscount, 2);
-        $taxAmount = round($taxAmount, 2);
-        $grandTotal = round($subtotal - $totalDiscount + $taxAmount, 2);
+        $taxableTotal = round($subtotal - $totalDiscount, 2);
+        $cgstAmount = $gstType === 'with_gst' ? round($taxableTotal * 0.09, 2) : 0.0;
+        $sgstAmount = $cgstAmount;
+        $taxAmount = round($cgstAmount + $sgstAmount, 2);
+        $grandTotal = round($taxableTotal + $taxAmount, 2);
 
         if ($grandTotal < 0) {
             $errors[] = 'The quotation total cannot be negative.';
@@ -448,7 +454,7 @@ class Quotation
             'quotation_date' => $quotationDate,
             'valid_until' => $validUntil,
             'currency' => 'INR',
-            'gst_type' => $taxAmount > 0 ? 'with_gst' : 'without_gst',
+            'gst_type' => $gstType,
             'subtotal' => $subtotal,
             'total_discount' => $totalDiscount,
             'tax_amount' => $taxAmount,
@@ -1334,8 +1340,6 @@ class Quotation
                 . $e($symbol) . ' ' . number_format((float) ($item['unit_price'] ?? 0), 2) . '</td>'
                 . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:right;">'
                 . $e($symbol) . ' ' . number_format((float) ($item['discount'] ?? 0), 2) . '</td>'
-                . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">'
-                . number_format((float) ($item['tax_percent'] ?? 0), 2) . '%</td>'
                 . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:right;">'
                 . $e($symbol) . ' ' . number_format((float) ($item['line_total'] ?? 0), 2) . '</td>'
                 . '</tr>';
@@ -1373,14 +1377,21 @@ class Quotation
             . '<th style="padding:8px;border:1px solid #1f4e79;">Qty</th>'
             . '<th style="padding:8px;border:1px solid #1f4e79;">Unit Price</th>'
             . '<th style="padding:8px;border:1px solid #1f4e79;">Discount</th>'
-            . '<th style="padding:8px;border:1px solid #1f4e79;">Tax %</th>'
             . '<th style="padding:8px;border:1px solid #1f4e79;">Line Total</th>'
             . '</tr></thead><tbody>' . $rows . '</tbody></table>'
             . '<table style="width:100%;border-collapse:collapse;font-size:14px;margin-left:auto;max-width:320px;">'
             . '<tr><td style="padding:4px 0;">Subtotal</td><td style="padding:4px 0;text-align:right;">' . $e($symbol) . ' ' . number_format((float) ($quotation['subtotal'] ?? 0), 2) . '</td></tr>'
-            . '<tr><td style="padding:4px 0;">Total Discount</td><td style="padding:4px 0;text-align:right;">' . $e($symbol) . ' ' . number_format((float) ($quotation['total_discount'] ?? 0), 2) . '</td></tr>'
-            . '<tr><td style="padding:4px 0;">Tax / GST</td><td style="padding:4px 0;text-align:right;">' . $e($symbol) . ' ' . number_format((float) ($quotation['tax_amount'] ?? 0), 2) . '</td></tr>'
-            . '<tr><td style="padding:8px 0;font-weight:bold;border-top:2px solid #1f4e79;">Grand Total</td>'
+            . '<tr><td style="padding:4px 0;">Total Discount</td><td style="padding:4px 0;text-align:right;">' . $e($symbol) . ' ' . number_format((float) ($quotation['total_discount'] ?? 0), 2) . '</td></tr>';
+
+        $emailTaxAmount = round((float) ($quotation['tax_amount'] ?? 0), 2);
+        if ($emailTaxAmount > 0) {
+            $emailCgst = round($emailTaxAmount / 2, 2);
+            $emailSgst = round($emailTaxAmount - $emailCgst, 2);
+            $html .= '<tr><td style="padding:4px 0;">CGST (9%)</td><td style="padding:4px 0;text-align:right;">' . $e($symbol) . ' ' . number_format($emailCgst, 2) . '</td></tr>'
+                . '<tr><td style="padding:4px 0;">SGST (9%)</td><td style="padding:4px 0;text-align:right;">' . $e($symbol) . ' ' . number_format($emailSgst, 2) . '</td></tr>';
+        }
+
+        $html .= '<tr><td style="padding:8px 0;font-weight:bold;border-top:2px solid #1f4e79;">Grand Total</td>'
             . '<td style="padding:8px 0;font-weight:bold;text-align:right;border-top:2px solid #1f4e79;">' . $e($symbol) . ' ' . number_format((float) ($quotation['grand_total'] ?? 0), 2) . '</td></tr>'
             . '</table>';
 
@@ -1444,6 +1455,33 @@ class Quotation
         $ok = $stmt->affected_rows >= 0;
         $stmt->close();
         return $ok;
+    }
+
+    /**
+     * Mark an accepted quotation as converted after the invoice has actually
+     * been saved from the Create Invoice page. The guard conditions make the
+     * call safe to repeat and keep already converted quotations untouched.
+     */
+    public function markConverted(int $quotationId, int $invoiceId): bool
+    {
+        $userId = $this->currentUserId();
+        if ($userId <= 0 || $quotationId <= 0 || $invoiceId <= 0) {
+            return false;
+        }
+
+        $stmt = $this->dbConnect->prepare(
+            "UPDATE {$this->quotationTable}
+             SET status = 'Converted', converted_invoice_id = ?
+             WHERE id = ? AND user_id = ?
+               AND status = 'Accepted'
+               AND converted_invoice_id IS NULL"
+        );
+        $stmt->bind_param('iii', $invoiceId, $quotationId, $userId);
+        $stmt->execute();
+        $updated = $stmt->affected_rows > 0;
+        $stmt->close();
+
+        return $updated;
     }
 
     /**

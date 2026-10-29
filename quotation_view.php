@@ -82,6 +82,8 @@ if (isset($_GET['created'])) {
     $statusNotice = 'Quotation saved as Draft, but the email could not be sent. You can try again from the Share option.';
 } elseif (isset($_GET['notice']) && $_GET['notice'] === 'converted') {
     $statusNotice = 'Converted quotations cannot be edited.';
+} elseif (isset($_GET['notice']) && $_GET['notice'] === 'convert_unavailable') {
+    $statusNotice = 'This quotation cannot be converted. It must be Accepted and not already converted.';
 }
 
 include('header.php');
@@ -179,10 +181,6 @@ include('header.php');
                             <div class="value" style="font-size: 1.5rem; color: #1e3c72;">
                                 <?php echo Quotation::escape($currencySymbol . ' ' . number_format((float) $quotation['grand_total'], 2)); ?>
                             </div>
-                            <div class="label">Notes</div>
-                            <div class="value mb-0">
-                                <?php echo $quotation['notes'] !== '' ? nl2br(Quotation::escape($quotation['notes'])) : '&mdash;'; ?>
-                            </div>
                         </div>
                     </div>
                 </div>
@@ -196,14 +194,13 @@ include('header.php');
                                 <th style="width: 70px;">Qty</th>
                                 <th style="width: 110px;">Unit Price</th>
                                 <th style="width: 100px;">Discount</th>
-                                <th style="width: 80px;">Tax %</th>
                                 <th style="width: 120px;">Line Total</th>
                             </tr>
                         </thead>
                         <tbody>
                             <?php if (empty($items)): ?>
                                 <tr>
-                                    <td colspan="7" class="text-center quotation-muted">No items were saved for this quotation.</td>
+                                    <td colspan="6" class="text-center quotation-muted">No items were saved for this quotation.</td>
                                 </tr>
                             <?php else: ?>
                                 <?php foreach ($items as $index => $item): ?>
@@ -220,7 +217,6 @@ include('header.php');
                                         <td><?php echo rtrim(rtrim(number_format((float) $item['quantity'], 2, '.', ''), '0'), '.'); ?></td>
                                         <td><?php echo Quotation::escape($currencySymbol . ' ' . number_format((float) $item['unit_price'], 2)); ?></td>
                                         <td><?php echo Quotation::escape($currencySymbol . ' ' . number_format((float) $item['discount'], 2)); ?></td>
-                                        <td><?php echo number_format((float) $item['tax_percent'], 2); ?>%</td>
                                         <td><strong><?php echo Quotation::escape($currencySymbol . ' ' . number_format((float) $item['line_total'], 2)); ?></strong></td>
                                     </tr>
                                 <?php endforeach; ?>
@@ -239,6 +235,11 @@ include('header.php');
                         </div>
                     </div>
                     <div class="col-lg-5 col-md-6 mb-3">
+                        <?php
+                        $viewTaxAmount = round((float) $quotation['tax_amount'], 2);
+                        $viewCgst = round($viewTaxAmount / 2, 2);
+                        $viewSgst = round($viewTaxAmount - $viewCgst, 2);
+                        ?>
                         <div class="quotation-totals">
                             <table>
                                 <tr>
@@ -249,10 +250,16 @@ include('header.php');
                                     <th>Total Discount</th>
                                     <td><?php echo Quotation::escape($currencySymbol . ' ' . number_format((float) $quotation['total_discount'], 2)); ?></td>
                                 </tr>
-                                <tr>
-                                    <th>Tax / GST</th>
-                                    <td><?php echo Quotation::escape($currencySymbol . ' ' . number_format((float) $quotation['tax_amount'], 2)); ?></td>
-                                </tr>
+                                <?php if ($viewTaxAmount > 0): ?>
+                                    <tr>
+                                        <th>CGST (9%)</th>
+                                        <td><?php echo Quotation::escape($currencySymbol . ' ' . number_format($viewCgst, 2)); ?></td>
+                                    </tr>
+                                    <tr>
+                                        <th>SGST (9%)</th>
+                                        <td><?php echo Quotation::escape($currencySymbol . ' ' . number_format($viewSgst, 2)); ?></td>
+                                    </tr>
+                                <?php endif; ?>
                                 <tr class="grand-total">
                                     <th>Grand Total</th>
                                     <td><?php echo Quotation::escape($currencySymbol . ' ' . number_format((float) $quotation['grand_total'], 2)); ?></td>
@@ -303,17 +310,18 @@ include('header.php');
                             <?php if ($isConverted): ?>
                                 <p class="mb-2">Converted successfully.</p>
                                 <?php if (!empty($quotation['converted_invoice_id'])): ?>
-                                    <a href="edit_invoice.php?update_id=<?php echo intval($quotation['converted_invoice_id']); ?>"
-                                        class="btn btn-outline-primary">
-                                        <i class="bi bi-receipt"></i> Open Invoice
+                                    <a href="print_invoice.php?invoice_id=<?php echo intval($quotation['converted_invoice_id']); ?>"
+                                        class="btn btn-outline-primary" target="_blank" rel="noopener">
+                                        <i class="bi bi-file-earmark-pdf"></i> Open Invoice
                                     </a>
                                 <?php endif; ?>
                             <?php elseif ($status === 'Accepted'): ?>
                                 <p class="mb-2">This quotation is accepted and ready to become an invoice.</p>
-                                <button type="button" class="btn btn-success" id="convertQuotation">
+                                <a href="create_invoice.php?from_quotation=<?php echo intval($quotationId); ?>"
+                                    class="btn btn-success" id="convertQuotation">
                                     <i class="bi bi-arrow-right-circle"></i> Convert to Invoice
-                                </button>
-                                <div id="convertQuotationAlert" class="small mt-2"></div>
+                                </a>
+                                <div class="small quotation-muted mt-2">You will be taken to the Create Invoice page with these details filled in. The quotation becomes Converted only after you save the invoice.</div>
                             <?php else: ?>
                                 <p class="mb-0 quotation-muted">The customer must accept this quotation through the secure email link before it can be converted to an invoice.</p>
                             <?php endif; ?>
@@ -532,35 +540,10 @@ include('header.php');
 
         var convertButton = document.getElementById('convertQuotation');
         if (convertButton) {
-            convertButton.addEventListener('click', function () {
-                if (!window.confirm('Convert this accepted quotation into an invoice? This action cannot be undone.')) {
-                    return;
+            convertButton.addEventListener('click', function (event) {
+                if (!window.confirm('Open the Create Invoice page with this quotation\'s details? The quotation will be marked as converted only after you save the invoice.')) {
+                    event.preventDefault();
                 }
-
-                convertButton.disabled = true;
-                convertButton.textContent = 'Converting...';
-
-                $.ajax({
-                    url: 'action.php',
-                    type: 'POST',
-                    dataType: 'json',
-                    data: {
-                        action: 'convert_quotation',
-                        id: quotationId,
-                        csrf_token: csrfToken
-                    }
-                }).done(function (response) {
-                    if (response && Number(response.status) === 1 && response.invoice_id) {
-                        window.location.href = 'edit_invoice.php?update_id=' + encodeURIComponent(response.invoice_id);
-                    } else {
-                        alertBox('convertQuotationAlert', (response && response.message) || 'Unable to convert quotation.', 'error');
-                    }
-                }).fail(function (xhr) {
-                    alertBox('convertQuotationAlert', (xhr.responseJSON && xhr.responseJSON.message) || 'Unable to convert quotation.', 'error');
-                }).always(function () {
-                    convertButton.disabled = false;
-                    convertButton.innerHTML = '<i class="bi bi-arrow-right-circle"></i> Convert to Invoice';
-                });
             });
         }
     }());

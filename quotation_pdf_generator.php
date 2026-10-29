@@ -25,6 +25,9 @@ function buildQuotationHtml(array $quotation, array $items): string
     $validUntil = quotationPdfDate($quotation['valid_until'] ?? '');
     $status = (string) ($quotation['status'] ?? 'Draft');
     $grandTotal = floatval($quotation['grand_total'] ?? 0);
+    $pdfTaxAmount = round(floatval($quotation['tax_amount'] ?? 0), 2);
+    $pdfCgst = round($pdfTaxAmount / 2, 2);
+    $pdfSgst = round($pdfTaxAmount - $pdfCgst, 2);
     $amountInWords = getAmountInWords($grandTotal, $currency);
 
     $logoPath = __DIR__ . '/img/PCS-Logo.png';
@@ -182,7 +185,6 @@ function buildQuotationHtml(array $quotation, array $items): string
             <th style="width: 45px;">Qty</th>
             <th style="width: 75px;">Unit Price</th>
             <th style="width: 65px;">Discount</th>
-            <th style="width: 45px;">Tax %</th>
             <th style="width: 85px;">Amount (' . quotationPdfHtml($currencySymbol) . ')</th>
         </tr>
     </thead>
@@ -204,7 +206,6 @@ function buildQuotationHtml(array $quotation, array $items): string
             <td class="text-center">' . rtrim(rtrim(number_format(floatval($item['quantity'] ?? 0), 2, '.', ''), '0'), '.') . '</td>
             <td class="text-right">' . number_format(floatval($item['unit_price'] ?? 0), 2) . '</td>
             <td class="text-right">' . number_format(floatval($item['discount'] ?? 0), 2) . '</td>
-            <td class="text-center">' . number_format(floatval($item['tax_percent'] ?? 0), 2) . '%</td>
             <td class="text-right">' . number_format(floatval($item['line_total'] ?? 0), 2) . '</td>
         </tr>';
     }
@@ -212,7 +213,7 @@ function buildQuotationHtml(array $quotation, array $items): string
     if (empty($items)) {
         $output .= '
         <tr>
-            <td colspan="7" class="text-center">No items available.</td>
+            <td colspan="6" class="text-center">No items available.</td>
         </tr>';
     }
 
@@ -252,11 +253,21 @@ function buildQuotationHtml(array $quotation, array $items): string
                 <tr>
                     <td class="totals-label">Total Discount</td>
                     <td class="totals-value">' . quotationPdfHtml($currencySymbol) . ' ' . number_format(floatval($quotation['total_discount'] ?? 0), 2) . '</td>
+                </tr>';
+
+    if ($pdfTaxAmount > 0) {
+        $output .= '
+                <tr>
+                    <td class="totals-label">CGST (9%)</td>
+                    <td class="totals-value">' . quotationPdfHtml($currencySymbol) . ' ' . number_format($pdfCgst, 2) . '</td>
                 </tr>
                 <tr>
-                    <td class="totals-label">Tax / GST</td>
-                    <td class="totals-value">' . quotationPdfHtml($currencySymbol) . ' ' . number_format(floatval($quotation['tax_amount'] ?? 0), 2) . '</td>
-                </tr>
+                    <td class="totals-label">SGST (9%)</td>
+                    <td class="totals-value">' . quotationPdfHtml($currencySymbol) . ' ' . number_format($pdfSgst, 2) . '</td>
+                </tr>';
+    }
+
+    $output .= '
                 <tr class="grand-total-box">
                     <td class="totals-label">Grand Total</td>
                     <td class="totals-value">' . quotationPdfHtml($currencySymbol) . ' ' . number_format($grandTotal, 2) . '</td>

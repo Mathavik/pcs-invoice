@@ -126,6 +126,12 @@ $csrfToken = Quotation::csrfToken();
                 </a>
             </div>
 
+            <?php if (isset($_GET['sent']) && $_GET['sent'] === '1'): ?>
+                <div class="alert alert-success py-2 px-3 mb-3">
+                    <i class="bi bi-check-circle"></i> Quotation sent to the customer successfully.
+                </div>
+            <?php endif; ?>
+
             <div class="quotation-toolbar mb-3">
                 <div class="row g-2 align-items-end">
                     <div class="col-lg-4 col-md-6">

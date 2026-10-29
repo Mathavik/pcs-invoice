@@ -34,6 +34,7 @@ $quotation = array_merge([
     'customer_email' => '',
     'customer_address' => '',
     'currency' => 'INR',
+    'gst_type' => 'with_gst',
     'status' => 'Draft',
     'notes' => '',
     'terms_conditions' => '',
@@ -47,8 +48,9 @@ $e = static function ($value): string {
     return Quotation::escape($value);
 };
 
-$totals = ['subtotal' => 0.0, 'discount' => 0.0, 'tax' => 0.0, 'grand' => 0.0];
+$totals = ['subtotal' => 0.0, 'discount' => 0.0, 'cgst' => 0.0, 'sgst' => 0.0, 'tax' => 0.0, 'grand' => 0.0];
 $formItems = array_values($formItems);
+$formGstType = (($quotation['gst_type'] ?? 'with_gst') === 'without_gst') ? 'without_gst' : 'with_gst';
 $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggestions)
     ? $customerSuggestions : [];
 ?>
@@ -159,6 +161,24 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                     <?php endforeach; ?>
                 </datalist>
 
+                <div class="row">
+                    <div class="col-12 mb-3">
+                        <label class="form-label font-weight-bold d-block">GST Type</label>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="gst_type" id="quotation_with_gst"
+                                value="with_gst" <?php echo $formGstType === 'with_gst' ? 'checked' : ''; ?>>
+                            <label class="form-check-label" for="quotation_with_gst">
+                                With GST (CGST 9% + SGST 9%)
+                            </label>
+                        </div>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="radio" name="gst_type" id="quotation_without_gst"
+                                value="without_gst" <?php echo $formGstType === 'without_gst' ? 'checked' : ''; ?>>
+                            <label class="form-check-label" for="quotation_without_gst">Without GST</label>
+                        </div>
+                    </div>
+                </div>
+
                 <hr>
 
                 <div class="d-flex flex-wrap justify-content-between align-items-center mb-3">
@@ -181,7 +201,7 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                                 <th style="width: 85px;">Qty *</th>
                                 <th style="width: 120px;">Unit Price *</th>
                                 <th style="width: 110px;">Discount</th>
-                                <th style="width: 90px;">Tax %</th>
+                                <th style="width: 110px;">Discount</th>
                                 <th style="width: 125px;">Line Total</th>
                                 <th style="width: 55px;"></th>
                             </tr>
@@ -194,22 +214,18 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                                     'quantity' => 1,
                                     'unit_price' => 0,
                                     'discount' => 0,
-                                    'tax_percent' => 0,
                                 ], is_array($item) ? $item : []);
 
                                 $quantity = is_numeric($item['quantity']) ? (float) $item['quantity'] : 0.0;
                                 $unitPrice = is_numeric($item['unit_price']) ? (float) $item['unit_price'] : 0.0;
                                 $discount = is_numeric($item['discount']) ? (float) $item['discount'] : 0.0;
-                                $taxPercent = is_numeric($item['tax_percent']) ? (float) $item['tax_percent'] : 0.0;
 
                                 $gross = round($quantity * $unitPrice, 2);
                                 $appliedDiscount = min(max($discount, 0), $gross);
                                 $lineTotal = round(max(0, $gross - $appliedDiscount), 2);
-                                $taxAmount = round($lineTotal * max(0, $taxPercent) / 100, 2);
 
                                 $totals['subtotal'] += $gross;
                                 $totals['discount'] += $appliedDiscount;
-                                $totals['tax'] += $taxAmount;
                             ?>
                                 <tr class="item-row">
                                     <td class="row-index text-center"><?php echo $index + 1; ?></td>
@@ -238,11 +254,6 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                                         <input type="number" class="form-control item-discount" name="discount[]"
                                             data-field="discount" min="0" step="0.01"
                                             value="<?php echo $e($item['discount']); ?>">
-                                    </td>
-                                    <td>
-                                        <input type="number" class="form-control item-tax" name="tax_percent[]"
-                                            data-field="tax_percent" min="0" max="100" step="0.01"
-                                            value="<?php echo $e($item['tax_percent']); ?>">
                                     </td>
                                     <td class="text-right line-total"><?php echo $e($currencySymbol . ' ' . number_format($lineTotal, 2)); ?></td>
                                     <td class="text-center">
@@ -281,10 +292,6 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                             <input type="number" class="form-control item-discount" name="discount[]"
                                 data-field="discount" min="0" step="0.01" value="0.00">
                         </td>
-                        <td>
-                            <input type="number" class="form-control item-tax" name="tax_percent[]"
-                                data-field="tax_percent" min="0" max="100" step="0.01" value="0">
-                        </td>
                         <td class="text-right line-total"><?php echo $e($currencySymbol . ' 0.00'); ?></td>
                         <td class="text-center">
                             <button type="button" class="btn btn-sm btn-outline-danger removeItemRow" title="Remove row">
@@ -294,7 +301,16 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                     </tr>
                 </template>
 
-                <?php $totals['grand'] = round($totals['subtotal'] - $totals['discount'] + $totals['tax'], 2); ?>
+                <?php
+                $totals['subtotal'] = round($totals['subtotal'], 2);
+                $totals['discount'] = round($totals['discount'], 2);
+                $taxableTotal = round($totals['subtotal'] - $totals['discount'], 2);
+                $totals['cgst'] = $formGstType === 'with_gst' ? round($taxableTotal * 0.09, 2) : 0.0;
+                $totals['sgst'] = $formGstType === 'with_gst' ? round($taxableTotal * 0.09, 2) : 0.0;
+                $totals['tax'] = round($totals['cgst'] + $totals['sgst'], 2);
+                $totals['grand'] = round($taxableTotal + $totals['tax'], 2);
+                $gstRowStyle = $formGstType === 'with_gst' ? '' : ' style="display:none;"';
+                ?>
                 <div class="row justify-content-end mb-4">
                     <div class="col-lg-5 col-md-7">
                         <div class="quotation-totals">
@@ -307,9 +323,13 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                                     <th>Total Discount</th>
                                     <td id="summaryDiscount"><?php echo $e($currencySymbol . ' ' . number_format($totals['discount'], 2)); ?></td>
                                 </tr>
-                                <tr>
-                                    <th>Tax / GST</th>
-                                    <td id="summaryTax"><?php echo $e($currencySymbol . ' ' . number_format($totals['tax'], 2)); ?></td>
+                                <tr id="summaryCgstRow"<?php echo $gstRowStyle; ?>>
+                                    <th>CGST (9%)</th>
+                                    <td id="summaryCgst"><?php echo $e($currencySymbol . ' ' . number_format($totals['cgst'], 2)); ?></td>
+                                </tr>
+                                <tr id="summarySgstRow"<?php echo $gstRowStyle; ?>>
+                                    <th>SGST (9%)</th>
+                                    <td id="summarySgst"><?php echo $e($currencySymbol . ' ' . number_format($totals['sgst'], 2)); ?></td>
                                 </tr>
                                 <tr class="grand-total">
                                     <th>Grand Total</th>
@@ -321,12 +341,14 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                 </div>
 
                 <div class="row">
-                    <div class="col-md-6 mb-3">
-                        <label class="form-label font-weight-bold" for="notes">Notes</label>
-                        <textarea class="form-control" id="notes" name="notes" rows="4" maxlength="5000"
-                            placeholder="Notes visible on the quotation"><?php echo $e($quotation['notes']); ?></textarea>
-                    </div>
-                    <div class="col-md-6 mb-3">
+                    <?php if (!$isEdit): ?>
+                        <div class="col-md-6 mb-3">
+                            <label class="form-label font-weight-bold" for="notes">Notes</label>
+                            <textarea class="form-control" id="notes" name="notes" rows="4" maxlength="5000"
+                                placeholder="Notes visible on the quotation"><?php echo $e($quotation['notes']); ?></textarea>
+                        </div>
+                    <?php endif; ?>
+                    <div class="col-md-<?php echo $isEdit ? '12' : '6'; ?> mb-3">
                         <label class="form-label font-weight-bold" for="terms_conditions">Terms &amp; Conditions</label>
                         <textarea class="form-control" id="terms_conditions" name="terms_conditions" rows="4"
                             maxlength="5000"

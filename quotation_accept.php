@@ -168,14 +168,13 @@ $e = static function ($value): string {
                                     <th class="text-center">Qty</th>
                                     <th class="text-end">Unit Price</th>
                                     <th class="text-end">Discount</th>
-                                    <th class="text-center">Tax %</th>
                                     <th class="text-end">Line Total</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 <?php if (empty($items)): ?>
                                     <tr>
-                                        <td colspan="7" class="text-center text-muted">No items available.</td>
+                                        <td colspan="6" class="text-center text-muted">No items available.</td>
                                     </tr>
                                 <?php else: ?>
                                     <?php foreach ($items as $index => $item): ?>
@@ -190,7 +189,6 @@ $e = static function ($value): string {
                                             <td class="text-center"><?php echo rtrim(rtrim(number_format((float) ($item['quantity'] ?? 0), 2, '.', ''), '0'), '.'); ?></td>
                                             <td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format((float) ($item['unit_price'] ?? 0), 2)); ?></td>
                                             <td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format((float) ($item['discount'] ?? 0), 2)); ?></td>
-                                            <td class="text-center"><?php echo number_format((float) ($item['tax_percent'] ?? 0), 2); ?>%</td>
                                             <td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format((float) ($item['line_total'] ?? 0), 2)); ?></td>
                                         </tr>
                                     <?php endforeach; ?>
@@ -204,7 +202,15 @@ $e = static function ($value): string {
                             <table class="table table-sm mb-0">
                                 <tr><th>Subtotal</th><td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format((float) ($quotation['subtotal'] ?? 0), 2)); ?></td></tr>
                                 <tr><th>Total Discount</th><td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format((float) ($quotation['total_discount'] ?? 0), 2)); ?></td></tr>
-                                <tr><th>Tax / GST</th><td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format((float) ($quotation['tax_amount'] ?? 0), 2)); ?></td></tr>
+                                <?php
+                                $acceptTaxAmount = round((float) ($quotation['tax_amount'] ?? 0), 2);
+                                if ($acceptTaxAmount > 0):
+                                    $acceptCgst = round($acceptTaxAmount / 2, 2);
+                                    $acceptSgst = round($acceptTaxAmount - $acceptCgst, 2);
+                                    ?>
+                                    <tr><th>CGST (9%)</th><td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format($acceptCgst, 2)); ?></td></tr>
+                                    <tr><th>SGST (9%)</th><td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format($acceptSgst, 2)); ?></td></tr>
+                                <?php endif; ?>
                                 <tr class="fw-bold"><th>Grand Total</th><td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format((float) ($quotation['grand_total'] ?? 0), 2)); ?></td></tr>
                             </table>
                         </div>

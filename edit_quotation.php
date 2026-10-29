@@ -61,6 +61,10 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     if (!Quotation::validateCsrf($_POST['csrf_token'] ?? '')) {
         $formErrors[] = 'Your session security token has expired. Please refresh the page and try again.';
     } else {
+        // Notes can only be set on the create page; keep the saved value when
+        // editing so removing the field from the form never clears it.
+        $_POST['notes'] = (string) ($quotationRecord['notes'] ?? '');
+
         $prepared = $quotationService->preparePayload($_POST, true, $quotationId);
         $formErrors = $prepared['errors'];
 
@@ -83,6 +87,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         'customer_phone',
         'customer_email',
         'customer_address',
+        'gst_type',
         'notes',
         'terms_conditions',
     ] as $field) {

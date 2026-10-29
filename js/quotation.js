@@ -235,18 +235,15 @@
             var quantityInput = row.querySelector('.item-qty');
             var priceInput = row.querySelector('.item-price');
             var discountInput = row.querySelector('.item-discount');
-            var taxInput = row.querySelector('.item-tax');
             var lineTotalCell = row.querySelector('.line-total');
 
             var quantity = number(quantityInput && quantityInput.value);
             var price = number(priceInput && priceInput.value);
             var discount = number(discountInput && discountInput.value);
-            var taxPercent = number(taxInput && taxInput.value);
 
             var gross = round(quantity * price);
             var appliedDiscount = Math.min(Math.max(discount, 0), gross);
             var lineTotal = round(Math.max(0, gross - appliedDiscount));
-            var taxAmount = round(lineTotal * Math.max(0, taxPercent) / 100);
 
             if (lineTotalCell) {
                 lineTotalCell.textContent = money(lineTotal);
@@ -254,32 +251,46 @@
 
             return {
                 gross: gross,
-                discount: appliedDiscount,
-                tax: taxAmount
+                discount: appliedDiscount
             };
+        }
+
+        function gstEnabled() {
+            var checked = form.querySelector('[name="gst_type"]:checked');
+            return !checked || checked.value === 'with_gst';
         }
 
         function calculateTotals() {
             var subtotal = 0;
             var discount = 0;
-            var tax = 0;
 
             rows().forEach(function (row) {
                 var totals = calculateRow(row);
                 subtotal += totals.gross;
                 discount += totals.discount;
-                tax += totals.tax;
             });
 
             subtotal = round(subtotal);
             discount = round(discount);
-            tax = round(tax);
-            var grandTotal = round(subtotal - discount + tax);
+            var taxableTotal = round(subtotal - discount);
+            var cgst = gstEnabled() ? round(taxableTotal * 0.09) : 0;
+            var sgst = gstEnabled() ? round(taxableTotal * 0.09) : 0;
+            var grandTotal = round(taxableTotal + cgst + sgst);
 
             setText('summarySubtotal', money(subtotal));
             setText('summaryDiscount', money(discount));
-            setText('summaryTax', money(tax));
+            setText('summaryCgst', money(cgst));
+            setText('summarySgst', money(sgst));
             setText('summaryGrandTotal', money(grandTotal));
+
+            var cgstRow = document.getElementById('summaryCgstRow');
+            var sgstRow = document.getElementById('summarySgstRow');
+            if (cgstRow) {
+                cgstRow.style.display = gstEnabled() ? '' : 'none';
+            }
+            if (sgstRow) {
+                sgstRow.style.display = gstEnabled() ? '' : 'none';
+            }
         }
 
         function addRow(values) {
@@ -287,7 +298,7 @@
             var row = fragment.querySelector('.item-row');
 
             if (values) {
-                ['product_name', 'product_description', 'quantity', 'unit_price', 'discount', 'tax_percent'].forEach(function (field) {
+                ['product_name', 'product_description', 'quantity', 'unit_price', 'discount'].forEach(function (field) {
                     var input = row.querySelector('[data-field="' + field + '"]');
                     if (input && values[field] !== undefined && values[field] !== null) {
                         input.value = values[field];
@@ -304,7 +315,7 @@
             row.querySelectorAll('input, textarea').forEach(function (input) {
                 if (input.classList.contains('item-qty')) {
                     input.value = '1';
-                } else if (input.classList.contains('item-discount') || input.classList.contains('item-tax')) {
+                } else if (input.classList.contains('item-discount')) {
                     input.value = '0';
                 } else {
                     input.value = '';
@@ -381,7 +392,6 @@
                 var quantity = row.querySelector('.item-qty');
                 var price = row.querySelector('.item-price');
                 var discount = row.querySelector('.item-discount');
-                var tax = row.querySelector('.item-tax');
 
                 var nameValue = name ? name.value.trim() : '';
                 var descriptionValue = description ? description.value.trim() : '';
@@ -389,7 +399,6 @@
                 var priceValue = price ? price.value.trim() : '';
                 var priceNumber = number(priceValue);
                 var discountValue = number(discount && discount.value);
-                var taxValue = number(tax && tax.value);
 
                 if (nameValue === '' && descriptionValue === '' && priceValue === '' && quantityValue === 1) {
                     return;
@@ -412,9 +421,6 @@
                 if (discountValue > round(quantityValue * priceNumber)) {
                     errors.push('Discount cannot be greater than the item amount.');
                 }
-                if (taxValue < 0 || taxValue > 100) {
-                    errors.push('Tax percentage must be between 0 and 100.');
-                }
             });
 
             if (!hasItem) {
@@ -431,9 +437,13 @@
         }
 
         tbody.addEventListener('input', function (event) {
-            if (event.target.matches('.item-qty, .item-price, .item-discount, .item-tax')) {
+            if (event.target.matches('.item-qty, .item-price, .item-discount')) {
                 calculateTotals();
             }
+        });
+
+        form.querySelectorAll('[name="gst_type"]').forEach(function (input) {
+            input.addEventListener('change', calculateTotals);
         });
 
         tbody.addEventListener('click', function (event) {

@@ -62,7 +62,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                     }
 
                     if (!empty($sendResult['ok'])) {
-                        header('Location: quotation_view.php?id=' . $quotationId . '&sent=1');
+                        header('Location: main.php?page=quotation_list&sent=1');
                     } else {
                         // The quotation is safely saved as Draft; the user can
                         // resend it later from the Share option.
@@ -88,6 +88,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         'customer_email',
         'customer_address',
         'status',
+        'gst_type',
         'notes',
         'terms_conditions',
     ] as $field) {

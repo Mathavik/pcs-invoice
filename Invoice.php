@@ -226,6 +226,8 @@ class Invoice
                 VALUES ($lastInsertId, '$itemCode', '$itemName', $itemPrice, $itemTaxable)";
             mysqli_query($this->dbConnect, $sqlInsertItem);
         }
+
+        return $lastInsertId;
     }
 
     // Edit and Update(Save)

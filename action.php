@@ -201,19 +201,9 @@ if (isset($_POST['action']) && $_POST['action'] === 'update_quotation_status') {
 }
 
 if (isset($_POST['action']) && $_POST['action'] === 'convert_quotation') {
-    requireQuotationCsrf();
-    $quotationId = intval($_POST['id'] ?? 0);
-    if ($quotationId <= 0) {
-        sendJsonAndExit(0, 'Invalid quotation ID.');
-    }
-
-    $quotation = new Quotation();
-    $invoiceId = $quotation->convertToInvoice($quotationId);
-    sendJsonResponse([
-        'status' => 1,
-        'message' => 'Quotation converted to an invoice successfully.',
-        'invoice_id' => $invoiceId
-    ]);
+    // Conversion now happens on the Create Invoice page so the invoice is
+    // saved only when the user submits that form.
+    sendJsonAndExit(0, 'Please use the Convert to Invoice button on the quotation page.');
 }
 
 sendJsonAndExit(0, 'Invalid request.');
