@@ -345,32 +345,32 @@ class Quotation
             $rawPrice = trim((string) ($unitPrices[$i] ?? ''));
             $rawDiscount = trim((string) ($discounts[$i] ?? '0'));
 
-            // Skip fully empty rows. A blank template row defaults to a
-            // quantity of 1, so that must also count as an empty row.
-            if ($name === '' && $rawPrice === '' && $description === ''
-                && ($rawQty === '' || floatval($rawQty) === 1.0)) {
+            $emptyQuantity = $rawQty === '' || (is_numeric($rawQty) && floatval($rawQty) === 0.0);
+            $emptyPrice = $rawPrice === '' || (is_numeric($rawPrice) && floatval($rawPrice) === 0.0);
+            $emptyDiscount = $rawDiscount === '' || (is_numeric($rawDiscount) && floatval($rawDiscount) === 0.0);
+            if ($name === '' && $description === '' && $emptyQuantity && $emptyPrice && $emptyDiscount) {
                 continue;
             }
 
             if ($name === '') {
                 $errors[] = 'Every item row needs a product or service name.';
             }
-            if (!is_numeric($rawQty) || floatval($rawQty) <= 0) {
-                $errors[] = 'Quantity must be greater than zero for all items.';
+            if ($rawQty !== '' && (!is_numeric($rawQty) || floatval($rawQty) < 0)) {
+                $errors[] = 'Quantity must be zero or greater for all items.';
             }
-            if (!is_numeric($rawPrice) || floatval($rawPrice) < 0) {
+            if ($rawPrice !== '' && (!is_numeric($rawPrice) || floatval($rawPrice) < 0)) {
                 $errors[] = 'Unit price must be zero or greater for all items.';
             }
-            if (!is_numeric($rawDiscount) || floatval($rawDiscount) < 0) {
+            if ($rawDiscount !== '' && (!is_numeric($rawDiscount) || floatval($rawDiscount) < 0)) {
                 $errors[] = 'Discount must be zero or greater for all items.';
             }
 
             // Round the stored values first so line totals, subtotal and tax
             // always agree with exactly what is written to the database.
-            $qty = round(floatval($rawQty), 2);
-            $price = round(floatval($rawPrice), 2);
-            $gross = round($qty * $price, 2);
-            $discount = round(floatval($rawDiscount), 2);
+            $qty = is_numeric($rawQty) ? round(floatval($rawQty), 2) : 0.0;
+            $price = is_numeric($rawPrice) ? round(floatval($rawPrice), 2) : 0.0;
+            $gross = round(($qty > 0 ? $qty : 1) * $price, 2);
+            $discount = is_numeric($rawDiscount) ? round(floatval($rawDiscount), 2) : 0.0;
 
             if ($discount > $gross) {
                 $errors[] = 'Discount cannot be greater than the item amount.';
@@ -1330,16 +1330,26 @@ class Quotation
         $validUntil = !empty($quotation['valid_until'])
             ? date('d M Y', strtotime((string) $quotation['valid_until'])) : '';
 
+        $showQuantityColumn = false;
+        foreach ($items as $item) {
+            if ((float) ($item['quantity'] ?? 0) > 0) {
+                $showQuantityColumn = true;
+                break;
+            }
+        }
+
         $rows = '';
         foreach ($items as $index => $item) {
             $rows .= '<tr>'
                 . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">' . ($index + 1) . '</td>'
                 . '<td style="padding:8px;border:1px solid #e2e8f0;">'
                 . '<strong>' . $e($item['product_name'] ?? '') . '</strong>'
-                . '</td>'
-                . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">'
-                . rtrim(rtrim(number_format((float) ($item['quantity'] ?? 0), 2, '.', ''), '0'), '.') . '</td>'
-                . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:right;">'
+                . '</td>';
+            if ($showQuantityColumn) {
+                $rows .= '<td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">'
+                    . rtrim(rtrim(number_format((float) ($item['quantity'] ?? 0), 2, '.', ''), '0'), '.') . '</td>';
+            }
+            $rows .= '<td style="padding:8px;border:1px solid #e2e8f0;text-align:right;">'
                 . $e($symbol) . ' ' . number_format((float) ($item['unit_price'] ?? 0), 2) . '</td>'
                 . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:right;">'
                 . $e($symbol) . ' ' . number_format((float) ($item['discount'] ?? 0), 2) . '</td>'
@@ -1379,7 +1389,7 @@ class Quotation
             . '<thead><tr style="background:#1f4e79;color:#ffffff;">'
             . '<th style="padding:8px;border:1px solid #1f4e79;">#</th>'
             . '<th style="padding:8px;border:1px solid #1f4e79;text-align:left;">Description</th>'
-            . '<th style="padding:8px;border:1px solid #1f4e79;">Qty</th>'
+            . ($showQuantityColumn ? '<th style="padding:8px;border:1px solid #1f4e79;">Qty</th>' : '')
             . '<th style="padding:8px;border:1px solid #1f4e79;">Unit Price</th>'
             . '<th style="padding:8px;border:1px solid #1f4e79;">Discount</th>'
             . '<th style="padding:8px;border:1px solid #1f4e79;">Line Total</th>'

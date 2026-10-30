@@ -241,7 +241,7 @@
             var price = number(priceInput && priceInput.value);
             var discount = number(discountInput && discountInput.value);
 
-            var gross = round(quantity * price);
+            var gross = round((quantity > 0 ? quantity : 1) * price);
             var appliedDiscount = Math.min(Math.max(discount, 0), gross);
             var lineTotal = round(Math.max(0, gross - appliedDiscount));
 
@@ -324,13 +324,7 @@
 
         function resetRow(row) {
             row.querySelectorAll('input, textarea').forEach(function (input) {
-                if (input.classList.contains('item-qty')) {
-                    input.value = '1';
-                } else if (input.classList.contains('item-discount')) {
-                    input.value = '0';
-                } else {
-                    input.value = '';
-                }
+                input.value = '';
             });
         }
 
@@ -405,11 +399,13 @@
 
                 var nameValue = name ? name.value.trim() : '';
                 var quantityValue = number(quantity && quantity.value);
+                var quantityRaw = quantity ? quantity.value.trim() : '';
                 var priceValue = price ? price.value.trim() : '';
                 var priceNumber = number(priceValue);
                 var discountValue = number(discount && discount.value);
 
-                if (nameValue === '' && priceValue === '' && quantityValue === 1) {
+                if (nameValue === '' && quantityValue === 0
+                    && (priceValue === '' || priceNumber === 0) && discountValue === 0) {
                     return;
                 }
 
@@ -418,16 +414,16 @@
                 if (nameValue === '') {
                     errors.push('Every item row needs a description.');
                 }
-                if (quantityValue <= 0) {
-                    errors.push('Quantity must be greater than zero for all items.');
+                if (quantityRaw !== '' && quantityValue < 0) {
+                    errors.push('Quantity must be zero or greater for all items.');
                 }
-                if (priceValue === '' || priceNumber < 0) {
+                if (priceValue !== '' && priceNumber < 0) {
                     errors.push('Unit price must be zero or greater for all items.');
                 }
-                if (discountValue < 0) {
+                if (discount && discount.value.trim() !== '' && discountValue < 0) {
                     errors.push('Discount must be zero or greater for all items.');
                 }
-                if (discountValue > round(quantityValue * priceNumber)) {
+                if (discountValue > round((quantityValue > 0 ? quantityValue : 1) * priceNumber)) {
                     errors.push('Discount cannot be greater than the item amount.');
                 }
             });

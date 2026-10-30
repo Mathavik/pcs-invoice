@@ -26,6 +26,13 @@ $token = strtolower(trim($token));
 $quotationService = new Quotation();
 $quotation = $quotationService->getQuotationByToken($token);
 $items = !empty($quotation) ? $quotationService->getQuotationItems(intval($quotation['id'])) : [];
+$showQuantityColumn = false;
+foreach ($items as $item) {
+    if ((float) ($item['quantity'] ?? 0) > 0) {
+        $showQuantityColumn = true;
+        break;
+    }
+}
 
 $message = '';
 $messageType = '';
@@ -173,7 +180,9 @@ $e = static function ($value): string {
                                 <tr>
                                     <th>#</th>
                                     <th>Description</th>
-                                    <th class="text-center">Qty</th>
+                                    <?php if ($showQuantityColumn): ?>
+                                        <th class="text-center">Qty</th>
+                                    <?php endif; ?>
                                     <th class="text-end">Unit Price</th>
                                     <th class="text-end">Discount</th>
                                     <th class="text-end">Line Total</th>
@@ -182,7 +191,7 @@ $e = static function ($value): string {
                             <tbody>
                                 <?php if (empty($items)): ?>
                                     <tr>
-                                        <td colspan="6" class="text-center text-muted">No items available.</td>
+                                        <td colspan="<?php echo $showQuantityColumn ? 6 : 5; ?>" class="text-center text-muted">No items available.</td>
                                     </tr>
                                 <?php else: ?>
                                     <?php foreach ($items as $index => $item): ?>
@@ -191,7 +200,9 @@ $e = static function ($value): string {
                                             <td>
                                                 <strong><?php echo $e($item['product_name'] ?? ''); ?></strong>
                                             </td>
-                                            <td class="text-center"><?php echo rtrim(rtrim(number_format((float) ($item['quantity'] ?? 0), 2, '.', ''), '0'), '.'); ?></td>
+                                            <?php if ($showQuantityColumn): ?>
+                                                <td class="text-center"><?php echo rtrim(rtrim(number_format((float) ($item['quantity'] ?? 0), 2, '.', ''), '0'), '.'); ?></td>
+                                            <?php endif; ?>
                                             <td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format((float) ($item['unit_price'] ?? 0), 2)); ?></td>
                                             <td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format((float) ($item['discount'] ?? 0), 2)); ?></td>
                                             <td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format((float) ($item['line_total'] ?? 0), 2)); ?></td>

@@ -207,16 +207,19 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                             <?php foreach ($formItems as $index => $item):
                                 $item = array_merge([
                                     'product_name' => '',
-                                    'quantity' => 1,
+                                    'quantity' => 0,
                                     'unit_price' => 0,
                                     'discount' => 0,
                                 ], is_array($item) ? $item : []);
 
                                 $quantity = is_numeric($item['quantity']) ? (float) $item['quantity'] : 0.0;
+                                $quantityInputValue = $quantity > 0 ? $e($item['quantity']) : '';
                                 $unitPrice = is_numeric($item['unit_price']) ? (float) $item['unit_price'] : 0.0;
                                 $discount = is_numeric($item['discount']) ? (float) $item['discount'] : 0.0;
+                                $priceInputValue = $unitPrice > 0 ? $e($item['unit_price']) : '';
+                                $discountInputValue = $discount > 0 ? $e($item['discount']) : '';
 
-                                $gross = round($quantity * $unitPrice, 2);
+                                $gross = round(($quantity > 0 ? $quantity : 1) * $unitPrice, 2);
                                 $appliedDiscount = min(max($discount, 0), $gross);
                                 $lineTotal = round(max(0, $gross - $appliedDiscount), 2);
 
@@ -233,18 +236,18 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                                     </td>
                                     <td>
                                         <input type="number" class="form-control item-qty" name="quantity[]"
-                                            data-field="quantity" min="0.01" step="0.01"
-                                            value="<?php echo $e($item['quantity']); ?>" required>
+                                            data-field="quantity" min="0" step="0.01"
+                                            value="<?php echo $quantityInputValue; ?>" placeholder="0">
                                     </td>
                                     <td>
                                         <input type="number" class="form-control item-price" name="unit_price[]"
                                             data-field="unit_price" min="0" step="0.01"
-                                            value="<?php echo $e($item['unit_price']); ?>" required>
+                                            value="<?php echo $priceInputValue; ?>" placeholder="0">
                                     </td>
                                     <td>
                                         <input type="number" class="form-control item-discount" name="discount[]"
                                             data-field="discount" min="0" step="0.01"
-                                            value="<?php echo $e($item['discount']); ?>">
+                                            value="<?php echo $discountInputValue; ?>" placeholder="0">
                                     </td>
                                     <td>
                                         <input type="number" class="form-control item-tax" name="tax_percent[]"
@@ -278,15 +281,15 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                         </td>
                         <td>
                             <input type="number" class="form-control item-qty" name="quantity[]"
-                                data-field="quantity" min="0.01" step="0.01" value="1" required>
+                                data-field="quantity" min="0" step="0.01" placeholder="0">
                         </td>
                         <td>
                             <input type="number" class="form-control item-price" name="unit_price[]"
-                                data-field="unit_price" min="0" step="0.01" value="0.00" required>
+                                data-field="unit_price" min="0" step="0.01" placeholder="0">
                         </td>
                         <td>
                             <input type="number" class="form-control item-discount" name="discount[]"
-                                data-field="discount" min="0" step="0.01" value="0.00">
+                                data-field="discount" min="0" step="0.01" placeholder="0">
                         </td>
                         <td>
                             <input type="number" class="form-control item-tax" name="tax_percent[]"

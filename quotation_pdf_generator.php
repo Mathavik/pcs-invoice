@@ -28,6 +28,13 @@ function buildQuotationHtml(array $quotation, array $items): string
     $pdfCgst = round($pdfTaxAmount / 2, 2);
     $pdfSgst = round($pdfTaxAmount - $pdfCgst, 2);
     $amountInWords = getAmountInWords($grandTotal, $currency);
+    $showQuantityColumn = false;
+    foreach ($items as $item) {
+        if (floatval($item['quantity'] ?? 0) > 0) {
+            $showQuantityColumn = true;
+            break;
+        }
+    }
 
     $logoPath = __DIR__ . '/img/PCS-Logo.png';
     $logoBase64 = '';
@@ -93,7 +100,7 @@ function buildQuotationHtml(array $quotation, array $items): string
         .totals-label { text-align: right; padding-right: 15px; width: 60%; color: #444; }
         .totals-value { text-align: right; width: 40%; font-weight: bold; white-space: nowrap; }
         .grand-total-box { background-color: #1f4e79; color: #fff; }
-        .grand-total-box td { padding: 8px 5px; font-size: 12px; }
+        .grand-total-box td { padding: 8px 5px; font-size: 12px; color: #fff; }
         .amount-words { margin-top: 20px; font-size: 10px; }
         .amount-words .label { font-weight: bold; }
         .amount-words .words { font-style: italic; color: #444; }
@@ -102,8 +109,9 @@ function buildQuotationHtml(array $quotation, array $items): string
         .notes-body { color: #444; font-size: 9.5px; }
         .footer-table { width: 100%; margin-top: 40px; border: none; }
         .footer-table td { vertical-align: bottom; border: none; }
+        .bank-details { font-size: 9px; line-height: 1.5; }
         .auth-section { text-align: right; padding-top: 50px; }
-        .computer-note { color: #888; font-size: 8px; margin-top: 24px; text-align: center; }
+        .computer-note { color: #888; font-size: 9px; margin-top: 16px; text-align: center; }
     </style>
 </head>
 <body>
@@ -175,7 +183,7 @@ function buildQuotationHtml(array $quotation, array $items): string
         <tr>
             <th style="width: 30px;">Sl.</th>
             <th>Description</th>
-            <th style="width: 45px;">Qty</th>
+            ' . ($showQuantityColumn ? '<th style="width: 45px;">Qty</th>' : '') . '
             <th style="width: 75px;">Unit Price</th>
             <th style="width: 65px;">Discount</th>
             <th style="width: 85px;">Amount (' . quotationPdfHtml($currencySymbol) . ')</th>
@@ -191,7 +199,8 @@ function buildQuotationHtml(array $quotation, array $items): string
             <td class="description">
                 <div class="bold">' . quotationPdfHtml($item['product_name'] ?? '') . '</div>
             </td>
-            <td class="text-center">' . rtrim(rtrim(number_format(floatval($item['quantity'] ?? 0), 2, '.', ''), '0'), '.') . '</td>
+            ' . ($showQuantityColumn ? '<td class="text-center">'
+                . rtrim(rtrim(number_format(floatval($item['quantity'] ?? 0), 2, '.', ''), '0'), '.') . '</td>' : '') . '
             <td class="text-right">' . number_format(floatval($item['unit_price'] ?? 0), 2) . '</td>
             <td class="text-right">' . number_format(floatval($item['discount'] ?? 0), 2) . '</td>
             <td class="text-right">' . number_format(floatval($item['line_total'] ?? 0), 2) . '</td>
@@ -201,7 +210,7 @@ function buildQuotationHtml(array $quotation, array $items): string
     if (empty($items)) {
         $output .= '
         <tr>
-            <td colspan="6" class="text-center">No items available.</td>
+            <td colspan="' . ($showQuantityColumn ? '6' : '5') . '" class="text-center">No items available.</td>
         </tr>';
     }
 
@@ -221,18 +230,7 @@ function buildQuotationHtml(array $quotation, array $items): string
                 <div class="notes-title">Terms &amp; Conditions</div>
                 <div class="notes-body">' . nl2br(quotationPdfHtml($terms)) . '</div>
             </div>
-
-            <div class="notes-section">
-                <div class="notes-title">Bank Details</div>
-                <div class="notes-body">';
-    foreach (Quotation::bankDetails() as $bankLabel => $bankValue) {
-        $output .= '<div><strong>' . quotationPdfHtml($bankLabel) . ':</strong> '
-            . quotationPdfHtml($bankValue) . '</div>';
-    }
-    $output .= '
-                </div>
-            </div>';
-
+';
     $output .= '
         </td>
         <td class="summary-right">
@@ -271,9 +269,13 @@ function buildQuotationHtml(array $quotation, array $items): string
 <table class="footer-table">
     <tr>
         <td style="width: 60%;">
-            <div style="font-size: 9px; color: #666;">
-                This quotation is valid until ' . quotationPdfHtml($validUntil) . '.<br>
-                Prices are subject to the terms and conditions stated above.
+            <div class="notes-title">Bank Details</div>
+            <div class="bank-details">';
+    foreach (Quotation::bankDetails() as $bankLabel => $bankValue) {
+        $output .= '<div><strong>' . quotationPdfHtml($bankLabel) . ':</strong> '
+            . quotationPdfHtml($bankValue) . '</div>';
+    }
+    $output .= '
             </div>
         </td>
         <td style="width: 40%;" class="auth-section">

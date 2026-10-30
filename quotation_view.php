@@ -11,6 +11,13 @@ $quotationService = new Quotation();
 $quotationId = intval($_GET['id'] ?? 0);
 $quotation = $quotationId > 0 ? $quotationService->getQuotation($quotationId) : [];
 $items = $quotation ? $quotationService->getQuotationItems($quotationId) : [];
+$showQuantityColumn = false;
+foreach ($items as $item) {
+    if ((float) ($item['quantity'] ?? 0) > 0) {
+        $showQuantityColumn = true;
+        break;
+    }
+}
 $csrfToken = Quotation::csrfToken();
 
 $pageError = $quotation ? '' : 'The quotation you are looking for could not be found.';
@@ -205,7 +212,9 @@ include('header.php');
                             <tr>
                                 <th style="width: 45px;">#</th>
                                 <th>Description</th>
-                                <th style="width: 70px;">Qty</th>
+                                <?php if ($showQuantityColumn): ?>
+                                    <th style="width: 70px;">Qty</th>
+                                <?php endif; ?>
                                 <th style="width: 110px;">Unit Price</th>
                                 <th style="width: 100px;">Discount</th>
                                 <th style="width: 120px;">Total</th>
@@ -214,7 +223,7 @@ include('header.php');
                         <tbody>
                             <?php if (empty($items)): ?>
                                 <tr>
-                                    <td colspan="6" class="text-center quotation-muted">No items were saved for this quotation.</td>
+                                    <td colspan="<?php echo $showQuantityColumn ? 6 : 5; ?>" class="text-center quotation-muted">No items were saved for this quotation.</td>
                                 </tr>
                             <?php else: ?>
                                 <?php foreach ($items as $index => $item): ?>
@@ -223,7 +232,9 @@ include('header.php');
                                         <td>
                                             <strong><?php echo Quotation::escape($item['product_name']); ?></strong>
                                         </td>
-                                        <td><?php echo rtrim(rtrim(number_format((float) $item['quantity'], 2, '.', ''), '0'), '.'); ?></td>
+                                        <?php if ($showQuantityColumn): ?>
+                                            <td><?php echo rtrim(rtrim(number_format((float) $item['quantity'], 2, '.', ''), '0'), '.'); ?></td>
+                                        <?php endif; ?>
                                         <td><?php echo Quotation::escape($currencySymbol . ' ' . number_format((float) $item['unit_price'], 2)); ?></td>
                                         <td><?php echo Quotation::escape($currencySymbol . ' ' . number_format((float) $item['discount'], 2)); ?></td>
                                         <td><strong><?php echo Quotation::escape($currencySymbol . ' ' . number_format((float) $item['line_total'], 2)); ?></strong></td>
