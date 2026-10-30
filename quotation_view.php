@@ -62,7 +62,7 @@ $displayStatus = $isConverted ? 'Converted' : ($responseStatus !== '' ? $respons
 $whatsApp = Quotation::formatWhatsAppNumber($quotation['customer_phone'] ?? '');
 $shareMessage = 'Hello ' . ($quotation['customer_name'] ?? '') . ",\n\n"
     . 'Please find our quotation ' . ($quotation['quotation_no'] ?? '') . ' dated '
-    . date('d M Y', strtotime((string) $quotation['quotation_date']))
+    . Quotation::formatQuotationDateTime($quotation)
     . ' for ' . $currencySymbol . ' ' . number_format((float) $quotation['grand_total'], 2) . ".\n"
     . 'Valid until: ' . date('d M Y', strtotime((string) $quotation['valid_until'])) . ".\n\n"
     . "Thank you,\nPavitha Consultancy Services OPC Pvt Ltd.";
@@ -97,7 +97,7 @@ if (isset($_GET['created'])) {
 } elseif (isset($_GET['notice']) && $_GET['notice'] === 'read_only') {
     $statusNotice = 'This quotation cannot be edited.';
 } elseif (isset($_GET['notice']) && $_GET['notice'] === 'convert_unavailable') {
-    $statusNotice = 'This quotation cannot be converted. It must be Accepted and not already converted.';
+    $statusNotice = 'This quotation cannot be converted. It must be sent, unexpired, and not rejected or already converted.';
 }
 
 include('header.php');
@@ -156,8 +156,8 @@ include('header.php');
                         <div class="quotation-view-meta">
                             <div class="label">Quotation No.</div>
                             <div class="value"><?php echo Quotation::escape($quotation['quotation_no']); ?></div>
-                            <div class="label">Quotation Date</div>
-                            <div class="value"><?php echo date('d M Y', strtotime((string) $quotation['quotation_date'])); ?></div>
+                            <div class="label">Quotation Date &amp; Time</div>
+                            <div class="value"><?php echo Quotation::escape(Quotation::formatQuotationDateTime($quotation)); ?></div>
                             <div class="label">Valid Until</div>
                             <div class="value"><?php echo date('d M Y', strtotime((string) $quotation['valid_until'])); ?></div>
                             <div class="label">Status</div>
@@ -331,15 +331,17 @@ include('header.php');
                                         <i class="bi bi-file-earmark-pdf"></i> Open Invoice
                                     </a>
                                 <?php endif; ?>
-                            <?php elseif ($responseStatus === 'Accepted'): ?>
-                                <p class="mb-2">This quotation is accepted and ready to become an invoice.</p>
+                            <?php elseif (empty($quotation['is_expired'])
+                                && ($responseStatus === 'Accepted'
+                                    || ($status === 'Sent' && empty($quotation['is_rejected'])))): ?>
+                                <p class="mb-2">This sent quotation is ready to become an invoice.</p>
                                 <a href="create_invoice.php?from_quotation=<?php echo intval($quotationId); ?>"
                                     class="btn btn-success" id="convertQuotation">
                                     <i class="bi bi-arrow-right-circle"></i> Convert to Invoice
                                 </a>
-                                <div class="small quotation-muted mt-2">You will be taken to the Create Invoice page with these details filled in. The quotation becomes Converted only after you save the invoice.</div>
+                                <div class="small quotation-muted mt-2">You can convert this quotation to an invoice when you are ready. Customer and item details will be filled in, and the quotation becomes Converted after you save the invoice.</div>
                             <?php else: ?>
-                                <p class="mb-0 quotation-muted">The customer must accept this quotation through the secure email link before it can be converted to an invoice.</p>
+                                <p class="mb-0 quotation-muted">Send this quotation first; a valid sent quotation can then be converted to an invoice.</p>
                             <?php endif; ?>
                         </div>
                     </div>

@@ -73,7 +73,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                         . (string) ($sendResult['message'] ?? 'The email could not be sent.')
                         . ' The quotation was not saved. Please try again.';
                 } else {
-                    header('Location: quotation_view.php?id=' . $quotationId . '&draft_saved=1');
+                    header('Location: main.php?page=quotation_list&draft_saved=1');
                     exit;
                 }
             } catch (Throwable $exception) {

@@ -70,10 +70,12 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         if (empty($formErrors)) {
             try {
                 $canSendFromEdit = ($quotationRecord['status'] ?? '') === 'Draft'
+                    || (($quotationRecord['status'] ?? '') === 'Sent' && empty($quotationRecord['is_accepted']))
                     || !empty($quotationRecord['is_rejected'])
                     || !empty($quotationRecord['is_expired']);
+                $canSendFromEdit = $canSendFromEdit && empty($quotationRecord['is_accepted']);
                 if (($_POST['quotation_action'] ?? '') === 'save_and_resend' && !$canSendFromEdit) {
-                    throw new InvalidArgumentException('Sending is available only for Draft, rejected or expired quotations.');
+                    throw new InvalidArgumentException('Sending is available only for Draft, unaccepted Sent, rejected or expired quotations.');
                 }
                 $quotationService->updateQuotation($quotationId, $_POST);
                 if (($_POST['quotation_action'] ?? '') === 'save_and_resend') {
@@ -84,11 +86,11 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                     if (empty($emailResult['ok'])) {
                         $formErrors[] = (string) ($emailResult['message'] ?? 'Quotation was saved, but the email could not be sent.');
                     } else {
-                        header('Location: quotation_view.php?id=' . $quotationId . '&updated=1&sent=1');
+                        header('Location: main.php?page=quotation_list&resent=1');
                         exit;
                     }
                 } else {
-                    header('Location: quotation_view.php?id=' . $quotationId . '&updated=1');
+                    header('Location: main.php?page=quotation_list&updated=1');
                     exit;
                 }
             } catch (Throwable $exception) {

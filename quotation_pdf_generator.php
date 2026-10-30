@@ -2,6 +2,17 @@
 require_once __DIR__ . '/invoice_pdf_generator.php';
 require_once __DIR__ . '/Quotation.php';
 
+function quotationPaymentQrDataUri(): string
+{
+    $qrPath = __DIR__ . '/img/QRcode.jpeg';
+    $qrData = file_get_contents($qrPath);
+    if ($qrData === false) {
+        throw new RuntimeException('Unable to read the UPI payment QR image.');
+    }
+
+    return 'data:image/jpeg;base64,' . base64_encode($qrData);
+}
+
 function quotationPdfDate($value): string
 {
     $timestamp = strtotime((string) $value);
@@ -21,7 +32,7 @@ function buildQuotationHtml(array $quotation, array $items): string
 
     $currency = (string) ($quotation['currency'] ?? 'INR');
     $currencySymbol = Quotation::currencySymbol($currency);
-    $quotationDate = quotationPdfDate($quotation['quotation_date'] ?? '');
+    $quotationDate = Quotation::formatQuotationDateTime($quotation);
     $validUntil = quotationPdfDate($quotation['valid_until'] ?? '');
     $grandTotal = floatval($quotation['grand_total'] ?? 0);
     $pdfTaxAmount = round(floatval($quotation['tax_amount'] ?? 0), 2);
@@ -35,6 +46,9 @@ function buildQuotationHtml(array $quotation, array $items): string
             break;
         }
     }
+    $showPaymentQr = strtoupper($currency) === 'INR'
+        && ($quotation['gst_type'] ?? '') === 'without_gst';
+    $paymentQrDataUri = $showPaymentQr ? quotationPaymentQrDataUri() : '';
 
     $logoPath = __DIR__ . '/img/PCS-Logo.png';
     $logoBase64 = '';
@@ -109,6 +123,9 @@ function buildQuotationHtml(array $quotation, array $items): string
         .notes-body { color: #444; font-size: 9.5px; }
         .footer-table { width: 100%; margin-top: 40px; border: none; }
         .footer-table td { vertical-align: bottom; border: none; }
+        .payment-qr-section { text-align: center; vertical-align: middle !important; }
+        .payment-qr { width: 105px; height: 105px; }
+        .payment-qr-label { font-size: 8px; color: #555; margin-top: 2px; }
         .bank-details { font-size: 9px; line-height: 1.5; }
         .auth-section { text-align: right; padding-top: 50px; }
         .computer-note { color: #888; font-size: 9px; margin-top: 16px; text-align: center; }
@@ -166,7 +183,7 @@ function buildQuotationHtml(array $quotation, array $items): string
                     <td>' . quotationPdfHtml($quotation['quotation_no'] ?? '') . '</td>
                 </tr>
                 <tr>
-                    <td class="meta-label">Date:</td>
+                    <td class="meta-label">Date &amp; Time:</td>
                     <td>' . quotationPdfHtml($quotationDate) . '</td>
                 </tr>
                 <tr>
@@ -268,7 +285,7 @@ function buildQuotationHtml(array $quotation, array $items): string
 
 <table class="footer-table">
     <tr>
-        <td style="width: 60%;">
+        <td style="width: ' . ($showPaymentQr ? '42%' : '60%') . ';">
             <div class="notes-title">Bank Details</div>
             <div class="bank-details">';
     foreach (Quotation::bankDetails() as $bankLabel => $bankValue) {
@@ -278,7 +295,13 @@ function buildQuotationHtml(array $quotation, array $items): string
     $output .= '
             </div>
         </td>
-        <td style="width: 40%;" class="auth-section">
+        ' . ($showPaymentQr
+            ? '<td style="width: 18%;" class="payment-qr-section">'
+                . '<img src="' . $paymentQrDataUri . '" class="payment-qr" alt="UPI payment QR code">'
+                . '<div class="payment-qr-label">Scan to Pay<br>maha.dec25@okicici</div>'
+                . '</td>'
+            : '') . '
+        <td style="width: ' . ($showPaymentQr ? '40%' : '40%') . ';" class="auth-section">
             <div style="font-weight: bold; margin-bottom: 42px;">For Pavitha Consultancy Services</div>
             <div class="bold">Authorized Signatory</div>
         </td>

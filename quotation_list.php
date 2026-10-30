@@ -122,6 +122,18 @@ $csrfToken = Quotation::csrfToken();
                 <div class="alert alert-success py-2 px-3 mb-3">
                     <i class="bi bi-check-circle"></i> Quotation sent to the customer successfully.
                 </div>
+            <?php elseif (isset($_GET['resent']) && $_GET['resent'] === '1'): ?>
+                <div class="alert alert-success py-2 px-3 mb-3">
+                    <i class="bi bi-check-circle"></i> Quotation updated and resent to the customer successfully.
+                </div>
+            <?php elseif (isset($_GET['updated']) && $_GET['updated'] === '1'): ?>
+                <div class="alert alert-success py-2 px-3 mb-3">
+                    <i class="bi bi-check-circle"></i> Quotation updated successfully.
+                </div>
+            <?php elseif (isset($_GET['draft_saved']) && $_GET['draft_saved'] === '1'): ?>
+                <div class="alert alert-success py-2 px-3 mb-3">
+                    <i class="bi bi-check-circle"></i> Quotation saved as Draft successfully.
+                </div>
             <?php endif; ?>
 
             <div class="quotation-toolbar mb-3">
@@ -157,7 +169,7 @@ $csrfToken = Quotation::csrfToken();
                         <label class="form-label fw-semibold" for="quotationStatusFilter">Status</label>
                         <select id="quotationStatusFilter" class="form-select">
                             <option value="">All Statuses</option>
-                            <?php foreach (Quotation::statuses() as $status): ?>
+                            <?php foreach (Quotation::listStatuses() as $status): ?>
                                 <option value="<?php echo pcs_quotation_h($status); ?>"><?php echo pcs_quotation_h($status); ?></option>
                             <?php endforeach; ?>
                         </select>
@@ -183,7 +195,7 @@ $csrfToken = Quotation::csrfToken();
                                 <th>Status</th>
                                 <th>View</th>
                                 <th>Print</th>
-                                <th>Share</th>
+                                <th>Convert</th>
                                 <th>Edit</th>
                                 <th>Delete</th>
                             </tr>
@@ -219,7 +231,7 @@ $csrfToken = Quotation::csrfToken();
                                             </a>
                                         </td>
                                         <td><?php echo pcs_quotation_h($quotationRow['customer_name']); ?></td>
-                                        <td><?php echo pcs_quotation_date($quotationRow['quotation_date'] ?? ''); ?></td>
+                                        <td><?php echo pcs_quotation_h(Quotation::formatQuotationDateTime($quotationRow)); ?></td>
                                         <td><?php echo pcs_quotation_date($quotationRow['valid_until'] ?? ''); ?></td>
                                         <td><?php echo pcs_quotation_money($quotationRow['grand_total'] ?? 0, $quotationRow['currency'] ?? 'INR'); ?></td>
                                         <td>
@@ -239,10 +251,23 @@ $csrfToken = Quotation::csrfToken();
                                             </a>
                                         </td>
                                         <td class="quotation-actions">
-                                            <button type="button" class="btn btn-link p-0 shareQuotation"
-                                                data-id="<?php echo $quotationId; ?>" title="Share quotation">
-                                                <i class="bi bi-share"></i>
-                                            </button>
+                                            <?php if ($isConverted && !empty($quotationRow['converted_invoice_id'])): ?>
+                                                <a href="print_invoice.php?invoice_id=<?php echo intval($quotationRow['converted_invoice_id']); ?>"
+                                                    title="Open converted invoice">
+                                                    <i class="bi bi-receipt"></i>
+                                                </a>
+                                            <?php elseif ($status === 'Sent'
+                                                && empty($quotationRow['is_rejected'])
+                                                && empty($quotationRow['is_expired'])): ?>
+                                                <a href="create_invoice.php?from_quotation=<?php echo $quotationId; ?>"
+                                                    title="Convert quotation to invoice">
+                                                    <i class="bi bi-arrow-repeat"></i>
+                                                </a>
+                                            <?php else: ?>
+                                                <span class="disabled" title="Only sent, unexpired quotations can be converted">
+                                                    <i class="bi bi-arrow-right-circle"></i>
+                                                </span>
+                                            <?php endif; ?>
                                         </td>
                                         <td class="quotation-actions">
                                             <?php if (!$canEdit): ?>
@@ -406,6 +431,19 @@ $csrfToken = Quotation::csrfToken();
         return date.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
     }
 
+    function formatQuotationDateTime(dateRaw, createdAtRaw) {
+        var dateText = formatDate(dateRaw);
+        var match = String(createdAtRaw || '').match(/\b\d{4}-\d{2}-\d{2}\s+(\d{2}):(\d{2}):\d{2}\b/);
+        if (!match || dateText === '\u2014') {
+            return dateText;
+        }
+
+        var hour = Number(match[1]);
+        var suffix = hour >= 12 ? 'PM' : 'AM';
+        hour = hour % 12 || 12;
+        return dateText + ', ' + String(hour).padStart(2, '0') + ':' + match[2] + ' ' + suffix + ' IST';
+    }
+
     function formatMoney(amount, currency) {
         var value = Number(amount || 0);
         var symbol = String(currency || 'INR').toUpperCase() === 'USD' ? '$' : '\u20B9';
@@ -469,13 +507,17 @@ $csrfToken = Quotation::csrfToken();
             ' data-valid-until="' + escapeHtml(quotation.valid_until) + '">' +
             '<td class="fw-semibold"><a href="quotation_view.php?id=' + id + '">' + escapeHtml(quotation.quotation_no) + '</a></td>' +
             '<td>' + escapeHtml(quotation.customer_name) + '</td>' +
-            '<td>' + escapeHtml(formatDate(quotation.quotation_date)) + '</td>' +
+            '<td>' + escapeHtml(formatQuotationDateTime(quotation.quotation_date, quotation.created_at)) + '</td>' +
             '<td>' + escapeHtml(formatDate(quotation.valid_until)) + '</td>' +
             '<td>' + escapeHtml(formatMoney(quotation.grand_total, quotation.currency)) + '</td>' +
             '<td><span class="quotation-status status-' + escapeHtml(status.toLowerCase()) + '">' + escapeHtml(status) + '</span></td>' +
             '<td class="quotation-actions"><a href="quotation_view.php?id=' + id + '" title="View quotation"><i class="bi bi-eye"></i></a></td>' +
             '<td class="quotation-actions"><a href="quotation_pdf.php?id=' + id + '" target="_blank" rel="noopener" title="Print quotation"><i class="bi bi-printer"></i></a></td>' +
-            '<td class="quotation-actions"><button type="button" class="btn btn-link p-0 shareQuotation" data-id="' + id + '" title="Share quotation"><i class="bi bi-share"></i></button></td>' +
+            '<td class="quotation-actions">' + (converted && quotation.converted_invoice_id
+                ? '<a href="print_invoice.php?invoice_id=' + Number(quotation.converted_invoice_id) + '" title="Open converted invoice"><i class="bi bi-receipt"></i></a>'
+                : (status === 'Sent' && !quotation.is_rejected && !quotation.is_expired
+                    ? '<a href="create_invoice.php?from_quotation=' + id + '" title="Convert quotation to invoice"><i class="bi bi-arrow-repeat"></i></a>'
+                    : '<span class="disabled" title="Only sent, unexpired quotations can be converted"><i class="bi bi-arrow-right-circle"></i></span>')) + '</td>' +
             '<td class="quotation-actions">' + editAction + '</td>' +
             '<td class="quotation-actions">' + deleteAction + '</td>' +
             '</tr>';

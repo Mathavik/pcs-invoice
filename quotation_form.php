@@ -372,9 +372,11 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                             Update Quotation
                         </button>
                         <?php
-                        $canSendFromForm = ($quotation['status'] ?? '') === 'Draft'
-                            || !empty($quotation['is_rejected'])
-                            || !empty($quotation['is_expired']);
+                        $canSendFromForm = (($quotation['status'] ?? '') === 'Draft'
+                                || (($quotation['status'] ?? '') === 'Sent' && empty($quotation['is_accepted']))
+                                || !empty($quotation['is_rejected'])
+                                || !empty($quotation['is_expired']))
+                            && empty($quotation['is_accepted']);
                         ?>
                         <?php if ($canSendFromForm): ?>
                             <button type="submit" name="quotation_action" value="save_and_resend"

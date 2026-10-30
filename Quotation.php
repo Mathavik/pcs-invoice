@@ -19,6 +19,7 @@ class Quotation
     private $dbConnect = false;
 
     public const STATUSES = ['Draft', 'Sent'];
+    public const LIST_STATUSES = ['Draft', 'Sent', 'Converted'];
 
     public function __construct()
     {
@@ -32,6 +33,9 @@ class Quotation
             throw new RuntimeException('Unable to connect to the database.');
         }
         $this->dbConnect->set_charset('utf8mb4');
+        if (!$this->dbConnect->query("SET time_zone = '+05:30'")) {
+            throw new RuntimeException('Unable to set the database timezone to India Standard Time.');
+        }
     }
 
     public function getConnection(): mysqli
@@ -56,6 +60,35 @@ class Quotation
     public static function statuses(): array
     {
         return self::STATUSES;
+    }
+
+    public static function listStatuses(): array
+    {
+        return self::LIST_STATUSES;
+    }
+
+    public static function formatQuotationDateTime(array $quotation): string
+    {
+        $timezone = new DateTimeZone('Asia/Kolkata');
+        $quotationDate = DateTimeImmutable::createFromFormat(
+            '!Y-m-d',
+            substr((string) ($quotation['quotation_date'] ?? ''), 0, 10),
+            $timezone
+        );
+        if ($quotationDate === false) {
+            return '—';
+        }
+
+        $createdAt = DateTimeImmutable::createFromFormat(
+            'Y-m-d H:i:s',
+            (string) ($quotation['created_at'] ?? ''),
+            $timezone
+        );
+        if ($createdAt === false) {
+            return $quotationDate->format('d M Y');
+        }
+
+        return $quotationDate->format('d M Y') . ', ' . $createdAt->format('h:i A') . ' IST';
     }
 
     /**
@@ -685,11 +718,13 @@ class Quotation
         }
 
         $status = trim((string) ($filters['status'] ?? ''));
-        if (in_array($status, self::STATUSES, true)) {
+        if ($status === 'Converted') {
+            $where[] = 'converted_invoice_id IS NOT NULL';
+        } elseif (in_array($status, self::STATUSES, true)) {
             if ($status === 'Draft') {
-                $where[] = "status = 'Draft'";
+                $where[] = "status = 'Draft' AND converted_invoice_id IS NULL";
             } else {
-                $where[] = "(status <> 'Draft' OR status IS NULL)";
+                $where[] = "(status <> 'Draft' OR status IS NULL) AND converted_invoice_id IS NULL";
             }
         }
 
@@ -773,7 +808,9 @@ class Quotation
                 && !$quotation['is_rejected']
                 && !empty($quotation['valid_until'])
                 && $quotation['valid_until'] < date('Y-m-d'));
-        $quotation['status'] = $storedStatus === 'Draft' ? 'Draft' : 'Sent';
+        $quotation['status'] = $quotation['is_converted']
+            ? 'Converted'
+            : ($storedStatus === 'Draft' ? 'Draft' : 'Sent');
 
         return $quotation;
     }
@@ -871,6 +908,29 @@ class Quotation
         }
 
         return array_slice($customers, 0, $limit);
+    }
+
+    public function getLatestInvoiceCustomerDetails(string $customerName): array
+    {
+        $userId = $this->currentUserId();
+        $customerName = trim($customerName);
+        if ($userId <= 0 || $customerName === '') {
+            return [];
+        }
+
+        $stmt = $this->dbConnect->prepare(
+            "SELECT receiver_address, gst_no, pan_no, supply
+             FROM {$this->invoiceOrderTable}
+             WHERE user_id = ? AND LOWER(TRIM(receiver_name)) = LOWER(TRIM(?))
+             ORDER BY id DESC
+             LIMIT 1"
+        );
+        $stmt->bind_param('is', $userId, $customerName);
+        $stmt->execute();
+        $details = $this->fetchOne($stmt);
+        $stmt->close();
+
+        return $details;
     }
 
     /* ---------------------------------------------------------------------
@@ -1325,8 +1385,7 @@ class Quotation
         };
         $currency = (string) ($quotation['currency'] ?? 'INR');
         $symbol = self::currencySymbol($currency);
-        $quotationDate = !empty($quotation['quotation_date'])
-            ? date('d M Y', strtotime((string) $quotation['quotation_date'])) : '';
+        $quotationDate = self::formatQuotationDateTime($quotation);
         $validUntil = !empty($quotation['valid_until'])
             ? date('d M Y', strtotime((string) $quotation['valid_until'])) : '';
 
@@ -1379,7 +1438,7 @@ class Quotation
             . '<tr><td style="padding:5px 0;color:#64748b;width:35%;">Customer</td><td style="padding:5px 0;">' . $e($quotation['customer_name'] ?? '') . '</td></tr>'
             . '<tr><td style="padding:5px 0;color:#64748b;">Email</td><td style="padding:5px 0;">' . $e($quotation['customer_email'] ?? '') . '</td></tr>'
             . '<tr><td style="padding:5px 0;color:#64748b;">Phone</td><td style="padding:5px 0;">' . $e($quotation['customer_phone'] ?? '') . '</td></tr>'
-            . '<tr><td style="padding:5px 0;color:#64748b;">Quotation Date</td><td style="padding:5px 0;">' . $e($quotationDate) . '</td></tr>'
+            . '<tr><td style="padding:5px 0;color:#64748b;">Quotation Date &amp; Time</td><td style="padding:5px 0;">' . $e($quotationDate) . '</td></tr>'
             . '<tr><td style="padding:5px 0;color:#64748b;">Valid Until</td><td style="padding:5px 0;">' . $e($validUntil) . '</td></tr>'
             . '<tr><td style="padding:5px 0;color:#64748b;">Amount</td><td style="padding:5px 0;font-weight:bold;font-size:16px;">'
             . $e($symbol) . ' ' . number_format((float) ($quotation['grand_total'] ?? 0), 2) . '</td></tr>'
@@ -1441,8 +1500,8 @@ class Quotation
      * ------------------------------------------------------------------ */
 
     /**
-     * Mark an accepted quotation as converted after the invoice has actually
-     * been saved from the Create Invoice page. The guard conditions make the
+     * Mark a sent or accepted quotation as converted after the invoice has
+     * actually been saved from the Create Invoice page. The guard conditions make the
      * call safe to repeat and keep already converted quotations untouched.
      */
     public function markConverted(int $quotationId, int $invoiceId): bool
@@ -1456,7 +1515,8 @@ class Quotation
             "UPDATE {$this->quotationTable}
              SET converted_invoice_id = ?
              WHERE id = ? AND user_id = ?
-               AND (accepted_at IS NOT NULL OR status = 'Accepted')
+               AND (accepted_at IS NOT NULL OR status = 'Accepted'
+                    OR (status = 'Sent' AND valid_until >= CURDATE()))
                AND converted_invoice_id IS NULL"
         );
         $stmt->bind_param('iii', $invoiceId, $quotationId, $userId);
@@ -1468,7 +1528,7 @@ class Quotation
     }
 
     /**
-     * Convert an accepted quotation into the existing invoice tables.
+     * Convert a sent or accepted quotation into the existing invoice tables.
      * Returns the new invoice id.
      */
     public function convertToInvoice(int $quotationId): int
@@ -1499,8 +1559,17 @@ class Quotation
             if (!empty($quotation['converted_invoice_id'])) {
                 throw new InvalidArgumentException('This quotation has already been converted.');
             }
-            if (empty($quotation['accepted_at']) && $quotation['status'] !== 'Accepted') {
-                throw new InvalidArgumentException('Only accepted quotations can be converted to an invoice.');
+            if (!empty($quotation['rejected_at']) || $quotation['status'] === 'Rejected') {
+                throw new InvalidArgumentException('Rejected or expired quotations cannot be converted to an invoice.');
+            }
+            if (empty($quotation['accepted_at'])
+                && !empty($quotation['valid_until'])
+                && $quotation['valid_until'] < date('Y-m-d')) {
+                throw new InvalidArgumentException('Rejected or expired quotations cannot be converted to an invoice.');
+            }
+            if (empty($quotation['accepted_at'])
+                && !in_array($quotation['status'], ['Sent', 'Accepted'], true)) {
+                throw new InvalidArgumentException('Only sent quotations can be converted to an invoice.');
             }
 
             $items = $this->getQuotationItems($quotationId);
@@ -1510,6 +1579,16 @@ class Quotation
 
             $quotationNo = (string) $quotation['quotation_no'];
             $receiverName = (string) $quotation['customer_name'];
+            $existingCustomerDetails = $this->getLatestInvoiceCustomerDetails($receiverName);
+            $receiverAddress = trim((string) ($quotation['customer_address'] ?? ''));
+            if ($receiverAddress === '') {
+                $receiverAddress = (string) ($existingCustomerDetails['receiver_address'] ?? '');
+            }
+            $gstNo = (string) ($existingCustomerDetails['gst_no'] ?? '');
+            $panNo = (string) ($existingCustomerDetails['pan_no'] ?? '');
+            $supply = (string) ($existingCustomerDetails['supply'] ?? '');
+            $currency = in_array(($quotation['currency'] ?? 'INR'), ['INR', 'USD'], true)
+                ? (string) $quotation['currency'] : 'INR';
 
             $initials = '';
             foreach (preg_split('/\s+/', mb_strtoupper($receiverName)) as $word) {
@@ -1533,15 +1612,19 @@ class Quotation
                 "INSERT INTO {$this->invoiceOrderTable}
                 (user_id, receiver_name, receiver_address, gst_no, pan_no, supply, currency, gst_type,
                  rate, cgst_amount, cgst_tax, sgst_amount, sgst_tax, vat_tax, total, note)
-                VALUES (?, ?, ?, '', '', '', 'INR', ?, ?, ?, ?, ?, ?, NULL, ?, ?)"
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)"
             );
             $cgstTax = $taxAmount > 0 ? 9 : 0;
             $sgstTax = $taxAmount > 0 ? 9 : 0;
             $insertOrder->bind_param(
-                'isssdddddds',
+                'isssssssdddddds',
                 $userId,
                 $receiverName,
-                $quotation['customer_address'],
+                $receiverAddress,
+                $gstNo,
+                $panNo,
+                $supply,
+                $currency,
                 $gstType,
                 $taxable,
                 $cgstAmount,

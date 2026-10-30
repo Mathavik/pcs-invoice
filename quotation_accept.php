@@ -155,10 +155,9 @@ $e = static function ($value): string {
                             <?php endif; ?>
                         </div>
                         <div class="col-md-6 text-md-end">
-                            <div class="text-muted small">Quotation Date</div>
+                            <div class="text-muted small">Quotation Date &amp; Time</div>
                             <div class="fw-semibold">
-                                <?php echo !empty($quotation['quotation_date'])
-                                    ? $e(date('d M Y', strtotime((string) $quotation['quotation_date']))) : '&mdash;'; ?>
+                                <?php echo $e(Quotation::formatQuotationDateTime($quotation)); ?>
                             </div>
                             <div class="text-muted small mt-3">Valid Until</div>
                             <div class="fw-semibold">

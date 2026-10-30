@@ -14,7 +14,9 @@ $sourceItems = [];
 if ($sourceQuotationId > 0) {
     $sourceQuotation = $quotationService->getQuotation($sourceQuotationId);
     if (empty($sourceQuotation)
-        || empty($sourceQuotation['is_accepted'])
+        || (empty($sourceQuotation['is_accepted']) && $sourceQuotation['status'] !== 'Sent')
+        || !empty($sourceQuotation['is_rejected'])
+        || !empty($sourceQuotation['is_expired'])
         || !empty($sourceQuotation['converted_invoice_id'])) {
         header('Location: quotation_view.php?id=' . $sourceQuotationId . '&notice=convert_unavailable');
         exit;
@@ -46,12 +48,16 @@ $prefill = [
 $prefillItems = [];
 
 if (!empty($sourceQuotation)) {
+    $existingCustomerDetails = $quotationService->getLatestInvoiceCustomerDetails(
+        (string) ($sourceQuotation['customer_name'] ?? '')
+    );
     $prefill = [
         'receiverName' => (string) ($sourceQuotation['customer_name'] ?? ''),
-        'receiverAddress' => (string) ($sourceQuotation['customer_address'] ?? ''),
-        'gstNo' => '',
-        'panNo' => '',
-        'supply' => '',
+        'receiverAddress' => (string) (($sourceQuotation['customer_address'] ?? '') !== ''
+            ? $sourceQuotation['customer_address'] : ($existingCustomerDetails['receiver_address'] ?? '')),
+        'gstNo' => (string) ($existingCustomerDetails['gst_no'] ?? ''),
+        'panNo' => (string) ($existingCustomerDetails['pan_no'] ?? ''),
+        'supply' => (string) ($existingCustomerDetails['supply'] ?? ''),
         'currency' => in_array(($sourceQuotation['currency'] ?? 'INR'), ['INR', 'USD'], true)
             ? (string) $sourceQuotation['currency'] : 'INR',
         'gst_type' => ($sourceQuotation['gst_type'] ?? '') === 'with_gst' ? 'with_gst' : 'without_gst',
