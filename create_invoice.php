@@ -14,7 +14,7 @@ $sourceItems = [];
 if ($sourceQuotationId > 0) {
     $sourceQuotation = $quotationService->getQuotation($sourceQuotationId);
     if (empty($sourceQuotation)
-        || ($sourceQuotation['status'] ?? '') !== 'Accepted'
+        || empty($sourceQuotation['is_accepted'])
         || !empty($sourceQuotation['converted_invoice_id'])) {
         header('Location: quotation_view.php?id=' . $sourceQuotationId . '&notice=convert_unavailable');
         exit;

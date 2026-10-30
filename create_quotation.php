@@ -12,7 +12,6 @@ $csrfToken = Quotation::csrfToken();
 $customerSuggestions = $quotation->getCustomerSuggestions();
 $formErrors = [];
 $formMode = 'create';
-$statusOptions = ['Draft'];
 $actionUrl = 'create_quotation.php';
 
 $quotationData = [
@@ -58,21 +57,25 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
                             (string) ($_POST['customer_email'] ?? '')
                         );
                     } catch (Throwable $sendException) {
-                        $sendResult = ['ok' => false];
+                        $sendResult = ['ok' => false, 'message' => $sendException->getMessage()];
                     }
 
                     if (!empty($sendResult['ok'])) {
                         header('Location: main.php?page=quotation_list&sent=1');
-                    } else {
-                        // The quotation is safely saved as Draft; the user can
-                        // resend it later from the Share option.
-                        header('Location: quotation_view.php?id=' . $quotationId . '&email_failed=1');
+                        exit;
                     }
+
+                    // Sending failed, so do not leave a half-finished Draft
+                    // behind. Remove the just-saved record and show the error
+                    // on the form with all entered values still intact.
+                    $quotation->deleteQuotation($quotationId);
+                    $formErrors[] = 'Quotation could not be sent: '
+                        . (string) ($sendResult['message'] ?? 'The email could not be sent.')
+                        . ' The quotation was not saved. Please try again.';
+                } else {
+                    header('Location: quotation_view.php?id=' . $quotationId . '&draft_saved=1');
                     exit;
                 }
-
-                header('Location: quotation_view.php?id=' . $quotationId . '&draft_saved=1');
-                exit;
             } catch (Throwable $exception) {
                 $formErrors[] = $exception->getMessage();
             }

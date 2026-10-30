@@ -166,6 +166,21 @@ if (isset($_POST['action']) && $_POST['action'] === 'send_quotation_email') {
     );
 }
 
+if (isset($_POST['action']) && $_POST['action'] === 'resend_quotation') {
+    requireQuotationCsrf();
+    $quotationId = intval($_POST['id'] ?? 0);
+    if ($quotationId <= 0) {
+        sendJsonAndExit(0, 'Invalid quotation ID.');
+    }
+
+    $quotationService = new Quotation();
+    $result = $quotationService->resendQuotationEmail($quotationId);
+    sendJsonAndExit(
+        !empty($result['ok']) ? 1 : 0,
+        (string) ($result['message'] ?? 'Unable to resend the quotation.')
+    );
+}
+
 if (isset($_POST['action']) && $_POST['action'] === 'delete_quotation') {
     requireQuotationCsrf();
     $quotationId = intval($_POST['id'] ?? 0);
@@ -181,23 +196,6 @@ if (isset($_POST['action']) && $_POST['action'] === 'delete_quotation') {
             ? 'Quotation deleted successfully.'
             : 'Unable to delete this quotation. It may be converted or no longer available.'
     );
-}
-
-if (isset($_POST['action']) && $_POST['action'] === 'update_quotation_status') {
-    requireQuotationCsrf();
-    $quotationId = intval($_POST['id'] ?? 0);
-    $newStatus = trim((string) ($_POST['status'] ?? ''));
-
-    if ($quotationId <= 0) {
-        sendJsonAndExit(0, 'Invalid quotation ID.');
-    }
-    if ($newStatus === '') {
-        sendJsonAndExit(0, 'Please select a status.');
-    }
-
-    $quotation = new Quotation();
-    $quotation->updateStatus($quotationId, $newStatus);
-    sendJsonAndExit(1, 'Quotation status updated to ' . $newStatus . '.');
 }
 
 if (isset($_POST['action']) && $_POST['action'] === 'convert_quotation') {

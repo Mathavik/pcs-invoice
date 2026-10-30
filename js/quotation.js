@@ -260,7 +260,18 @@
             return !checked || checked.value === 'with_gst';
         }
 
+        function updateItemTaxRates() {
+            var rate = gstEnabled() ? '18' : '0';
+            rows().forEach(function (row) {
+                var taxInput = row.querySelector('.item-tax');
+                if (taxInput) {
+                    taxInput.value = rate;
+                }
+            });
+        }
+
         function calculateTotals() {
+            updateItemTaxRates();
             var subtotal = 0;
             var discount = 0;
 
@@ -298,7 +309,7 @@
             var row = fragment.querySelector('.item-row');
 
             if (values) {
-                ['product_name', 'product_description', 'quantity', 'unit_price', 'discount'].forEach(function (field) {
+                ['product_name', 'quantity', 'unit_price', 'discount', 'tax_percent'].forEach(function (field) {
                     var input = row.querySelector('[data-field="' + field + '"]');
                     if (input && values[field] !== undefined && values[field] !== null) {
                         input.value = values[field];
@@ -388,26 +399,24 @@
 
             itemRows.forEach(function (row) {
                 var name = row.querySelector('.item-name');
-                var description = row.querySelector('.item-description');
                 var quantity = row.querySelector('.item-qty');
                 var price = row.querySelector('.item-price');
                 var discount = row.querySelector('.item-discount');
 
                 var nameValue = name ? name.value.trim() : '';
-                var descriptionValue = description ? description.value.trim() : '';
                 var quantityValue = number(quantity && quantity.value);
                 var priceValue = price ? price.value.trim() : '';
                 var priceNumber = number(priceValue);
                 var discountValue = number(discount && discount.value);
 
-                if (nameValue === '' && descriptionValue === '' && priceValue === '' && quantityValue === 1) {
+                if (nameValue === '' && priceValue === '' && quantityValue === 1) {
                     return;
                 }
 
                 hasItem = true;
 
                 if (nameValue === '') {
-                    errors.push('Every item row needs a product or service name.');
+                    errors.push('Every item row needs a description.');
                 }
                 if (quantityValue <= 0) {
                     errors.push('Quantity must be greater than zero for all items.');
@@ -424,7 +433,7 @@
             });
 
             if (!hasItem) {
-                errors.push('Add at least one product or service.');
+                errors.push('Add at least one item.');
             }
 
             // Remove duplicate messages so the alert stays readable.

@@ -18,7 +18,7 @@ class Quotation
     private $invoiceOrderItemTable = 'invoice_order_item';
     private $dbConnect = false;
 
-    public const STATUSES = ['Draft', 'Sent', 'Accepted', 'Rejected', 'Expired', 'Converted'];
+    public const STATUSES = ['Draft', 'Sent'];
 
     public function __construct()
     {
@@ -107,25 +107,6 @@ class Quotation
         }
 
         return $items;
-    }
-
-    /**
-     * Allowed manual status transitions. Converted is only reachable through
-     * convertToInvoice() so it can never be set without an invoice.
-     */
-    public static function allowedTransitions(string $current): array
-    {
-        $map = [
-            // Accepted is intentionally not a manual transition. It may only
-            // be set by the customer through the secure acceptance link.
-            'Draft' => ['Draft', 'Sent', 'Rejected', 'Expired'],
-            'Sent' => ['Sent', 'Rejected', 'Expired'],
-            'Accepted' => ['Accepted', 'Rejected'],
-            'Rejected' => ['Rejected', 'Draft', 'Sent'],
-            'Expired' => ['Expired', 'Draft', 'Sent'],
-            'Converted' => ['Converted'],
-        ];
-        return $map[$current] ?? ['Draft'];
     }
 
     public static function csrfToken(): string
@@ -314,11 +295,9 @@ class Quotation
         }
 
         $status = trim((string) ($post['status'] ?? 'Draft'));
-        // A newly created quotation always starts as Draft. Manual creation
-        // can never jump straight to Sent, Accepted or Rejected.
+        // A newly created quotation always starts as Draft.
         $allowedCreateStatuses = ['Draft'];
         if (!in_array($status, self::STATUSES, true)
-            || $status === 'Converted'
             || (!$isUpdate && !in_array($status, $allowedCreateStatuses, true))) {
             $status = 'Draft';
         }
@@ -539,7 +518,7 @@ class Quotation
         if (empty($existing)) {
             throw new InvalidArgumentException('Quotation not found.');
         }
-        if ($existing['status'] === 'Converted') {
+        if (!empty($existing['is_converted']) || !empty($existing['converted_invoice_id'])) {
             throw new InvalidArgumentException('Converted quotations cannot be edited.');
         }
 
@@ -550,15 +529,6 @@ class Quotation
 
         $data = $prepared['data'];
         $items = $prepared['items'];
-
-        $newStatus = $data['status'];
-        if ($newStatus !== $existing['status']) {
-            $allowed = self::allowedTransitions($existing['status']);
-            if (!in_array($newStatus, $allowed, true) || $newStatus === 'Converted') {
-                $newStatus = $existing['status'];
-            }
-        }
-        $data['status'] = $newStatus;
 
         $this->dbConnect->begin_transaction();
         try {
@@ -648,7 +618,7 @@ class Quotation
         if (empty($quotation) || intval($quotation['user_id']) !== $userId) {
             return false;
         }
-        if ($quotation['status'] === 'Converted') {
+        if (!empty($quotation['is_converted']) || !empty($quotation['converted_invoice_id'])) {
             return false;
         }
 
@@ -681,30 +651,8 @@ class Quotation
      * Read operations
      * ------------------------------------------------------------------ */
 
-    public function markExpired(): void
-    {
-        $userId = $this->currentUserId();
-        if ($userId <= 0) {
-            return;
-        }
-        $stmt = $this->dbConnect->prepare(
-            "UPDATE {$this->quotationTable}
-             SET status = 'Expired'
-             WHERE user_id = ?
-               AND status IN ('Draft', 'Sent')
-               AND converted_invoice_id IS NULL
-               AND valid_until IS NOT NULL
-               AND valid_until < CURDATE()"
-        );
-        $stmt->bind_param('i', $userId);
-        $stmt->execute();
-        $stmt->close();
-    }
-
     public function getQuotationList(array $filters = [], int $page = 1, int $perPage = 10): array
     {
-        $this->markExpired();
-
         $userId = $this->currentUserId();
         $page = max(1, $page);
         $perPage = max(1, min(100, $perPage));
@@ -738,9 +686,11 @@ class Quotation
 
         $status = trim((string) ($filters['status'] ?? ''));
         if (in_array($status, self::STATUSES, true)) {
-            $where[] = 'status = ?';
-            $types .= 's';
-            $params[] = $status;
+            if ($status === 'Draft') {
+                $where[] = "status = 'Draft'";
+            } else {
+                $where[] = "(status <> 'Draft' OR status IS NULL)";
+            }
         }
 
         $whereSql = implode(' AND ', $where);
@@ -772,6 +722,10 @@ class Quotation
         $listStmt->execute();
         $quotations = $this->fetchAll($listStmt);
         $listStmt->close();
+        foreach ($quotations as &$quotation) {
+            $quotation = $this->normalizeLifecycleStatus($quotation);
+        }
+        unset($quotation);
 
         return [
             'quotations' => $quotations,
@@ -797,28 +751,31 @@ class Quotation
         $row = $this->fetchOne($stmt);
         $stmt->close();
 
-        if (!empty($row)) {
-            // Do not overwrite accepted/rejected/converted records.
-            if (in_array($row['status'], ['Draft', 'Sent'], true)
-                && !empty($row['valid_until'])
-                && $row['valid_until'] < date('Y-m-d')
-                && empty($row['converted_invoice_id'])
-            ) {
-                $update = $this->dbConnect->prepare(
-                    "UPDATE {$this->quotationTable}
-                     SET status = 'Expired'
-                     WHERE id = ? AND user_id = ?
-                       AND status IN ('Draft', 'Sent')
-                       AND converted_invoice_id IS NULL"
-                );
-                $update->bind_param('ii', $quotationId, $userId);
-                $update->execute();
-                $update->close();
-                $row['status'] = 'Expired';
-            }
+        return $this->normalizeLifecycleStatus($row);
+    }
+
+    private function normalizeLifecycleStatus(array $quotation): array
+    {
+        if (empty($quotation)) {
+            return $quotation;
         }
 
-        return $row;
+        $storedStatus = (string) ($quotation['status'] ?? 'Draft');
+        $quotation['is_converted'] = $storedStatus === 'Converted'
+            || !empty($quotation['converted_invoice_id']);
+        $quotation['is_accepted'] = $storedStatus === 'Accepted'
+            || !empty($quotation['accepted_at']);
+        $quotation['is_rejected'] = $storedStatus === 'Rejected'
+            || !empty($quotation['rejected_at']);
+        $quotation['is_expired'] = $storedStatus === 'Expired'
+            || (!$quotation['is_converted']
+                && !$quotation['is_accepted']
+                && !$quotation['is_rejected']
+                && !empty($quotation['valid_until'])
+                && $quotation['valid_until'] < date('Y-m-d'));
+        $quotation['status'] = $storedStatus === 'Draft' ? 'Draft' : 'Sent';
+
+        return $quotation;
     }
 
     public function getQuotationItems(int $quotationId): array
@@ -1010,25 +967,7 @@ class Quotation
             return [];
         }
 
-        if (in_array($row['status'], ['Draft', 'Sent'], true)
-            && !empty($row['valid_until'])
-            && $row['valid_until'] < date('Y-m-d')
-            && empty($row['converted_invoice_id'])
-        ) {
-            $update = $this->dbConnect->prepare(
-                "UPDATE {$this->quotationTable}
-                 SET status = 'Expired'
-                 WHERE id = ?
-                   AND status IN ('Draft', 'Sent')
-                   AND converted_invoice_id IS NULL"
-            );
-            $update->bind_param('i', $row['id']);
-            $update->execute();
-            $update->close();
-            $row['status'] = 'Expired';
-        }
-
-        return $row;
+        return $this->normalizeLifecycleStatus($row);
     }
 
     /**
@@ -1069,11 +1008,11 @@ class Quotation
             }
 
             $status = (string) $quotation['status'];
-            if ($status === 'Converted') {
+            if ($status === 'Converted' || !empty($quotation['converted_invoice_id'])) {
                 $this->dbConnect->rollback();
                 return ['ok' => false, 'message' => 'This quotation has already been converted and can no longer be changed.'];
             }
-            if ($status === 'Accepted') {
+            if ($status === 'Accepted' || !empty($quotation['accepted_at'])) {
                 $this->dbConnect->rollback();
                 return [
                     'ok' => false,
@@ -1082,7 +1021,7 @@ class Quotation
                     'message' => 'This quotation has already been accepted.',
                 ];
             }
-            if ($status === 'Rejected') {
+            if ($status === 'Rejected' || !empty($quotation['rejected_at'])) {
                 $this->dbConnect->rollback();
                 return [
                     'ok' => false,
@@ -1096,16 +1035,6 @@ class Quotation
                 || (!empty($quotation['valid_until']) && $quotation['valid_until'] < date('Y-m-d'));
 
             if ($isExpired) {
-                if ($status !== 'Expired') {
-                    $expire = $this->dbConnect->prepare(
-                        "UPDATE {$this->quotationTable}
-                         SET status = 'Expired'
-                         WHERE id = ? AND status IN ('Draft', 'Sent') AND converted_invoice_id IS NULL"
-                    );
-                    $expire->bind_param('i', $quotation['id']);
-                    $expire->execute();
-                    $expire->close();
-                }
                 $this->dbConnect->commit();
                 return [
                     'ok' => false,
@@ -1116,17 +1045,17 @@ class Quotation
                 ];
             }
 
-            if (!in_array($status, ['Draft', 'Sent'], true)) {
+            if ($status !== 'Sent') {
                 $this->dbConnect->rollback();
-                return ['ok' => false, 'message' => 'This quotation cannot be updated.'];
+                return ['ok' => false, 'message' => 'Only sent quotations can be accepted or rejected.'];
             }
 
             if ($decision === 'accept') {
                 $update = $this->dbConnect->prepare(
                     "UPDATE {$this->quotationTable}
-                     SET status = 'Accepted', accepted_at = NOW(),
+                     SET accepted_at = NOW(),
                          rejected_at = NULL, rejection_reason = NULL
-                     WHERE id = ? AND status IN ('Draft', 'Sent')"
+                     WHERE id = ? AND status = 'Sent'"
                 );
                 $update->bind_param('i', $quotation['id']);
                 $update->execute();
@@ -1147,9 +1076,9 @@ class Quotation
 
             $update = $this->dbConnect->prepare(
                 "UPDATE {$this->quotationTable}
-                 SET status = 'Rejected', rejected_at = NOW(), rejection_reason = ?,
+                 SET rejected_at = NOW(), rejection_reason = ?,
                      accepted_at = NULL
-                 WHERE id = ? AND status IN ('Draft', 'Sent')"
+                 WHERE id = ? AND status = 'Sent'"
             );
             $update->bind_param('si', $reason, $quotation['id']);
             $update->execute();
@@ -1172,11 +1101,7 @@ class Quotation
         }
     }
 
-    /**
-     * Mark a quotation Sent only after the email was actually delivered to
-     * the mail server. Existing Accepted/Rejected/Converted quotes and
-     * already-expired quotes are never overwritten.
-     */
+    /** Mark a successfully emailed, still-valid quotation as Sent. */
     public function recordEmailSent(int $quotationId): bool
     {
         $userId = $this->currentUserId();
@@ -1188,7 +1113,7 @@ class Quotation
             "UPDATE {$this->quotationTable}
              SET status = 'Sent'
              WHERE id = ? AND user_id = ?
-               AND status = 'Draft'
+               AND status IN ('Draft', 'Sent')
                AND converted_invoice_id IS NULL
                AND valid_until >= CURDATE()"
         );
@@ -1242,8 +1167,14 @@ class Quotation
         if (empty($quotation)) {
             return ['ok' => false, 'message' => 'Quotation not found.'];
         }
-        if (($quotation['status'] ?? '') === 'Converted') {
+        if (!empty($quotation['is_converted']) || !empty($quotation['converted_invoice_id'])) {
             return ['ok' => false, 'message' => 'Converted quotations cannot be emailed.'];
+        }
+        if (!empty($quotation['accepted_at'])) {
+            return ['ok' => false, 'message' => 'An accepted quotation cannot be resent.'];
+        }
+        if (!empty($quotation['valid_until']) && (string) $quotation['valid_until'] < date('Y-m-d')) {
+            return ['ok' => false, 'message' => 'This quotation has expired. Update its valid-until date before resending.'];
         }
 
         $toEmail = trim($toEmail);
@@ -1264,22 +1195,26 @@ class Quotation
             return ['ok' => false, 'message' => 'This quotation has no items to email.'];
         }
 
-        $token = $this->ensurePublicToken($quotationId);
-        $baseUrl = self::publicBaseUrl();
-        $acceptUrl = $baseUrl . '/quotation_accept.php?token=' . rawurlencode($token) . '&response=accept';
-        $rejectUrl = $baseUrl . '/quotation_accept.php?token=' . rawurlencode($token) . '&response=reject';
-
         $subject = 'Quotation ' . (string) ($quotation['quotation_no'] ?? '') . ' from ' . SMTP_FROM_NAME;
-        $htmlBody = $this->buildQuotationEmailHtml($quotation, $items, $acceptUrl, $rejectUrl);
-        $plainBody = 'Dear ' . (string) ($quotation['customer_name'] ?? '') . ",\n\n"
-            . 'Please review quotation ' . (string) ($quotation['quotation_no'] ?? '') . ".\n"
-            . 'Amount: ' . self::currencySymbol((string) ($quotation['currency'] ?? 'INR')) . ' '
-            . number_format((float) ($quotation['grand_total'] ?? 0), 2) . "\n"
-            . 'Valid until: ' . (!empty($quotation['valid_until'])
-                ? date('d M Y', strtotime((string) $quotation['valid_until'])) : '') . "\n\n"
-            . "Accept this quotation:\n" . $acceptUrl . "\n\n"
-            . "Reject this quotation:\n" . $rejectUrl . "\n\n"
-            . "Thank you,\n" . SMTP_FROM_NAME;
+
+        try {
+            require_once __DIR__ . '/quotation_pdf_generator.php';
+            $quotationPdfHtml = buildQuotationHtml($quotation, $items);
+            if ($quotationPdfHtml === '') {
+                return ['ok' => false, 'message' => 'Unable to generate the quotation PDF.'];
+            }
+
+            $dompdf = createInvoiceDompdf();
+            $dompdf->loadHtml($quotationPdfHtml);
+            $dompdf->setPaper('A4', 'portrait');
+            $dompdf->render();
+            $pdfBytes = $dompdf->output();
+            if ($pdfBytes === '') {
+                return ['ok' => false, 'message' => 'Unable to generate the quotation PDF.'];
+            }
+        } catch (\Throwable $exception) {
+            return ['ok' => false, 'message' => 'Unable to generate the quotation PDF.'];
+        }
 
         try {
             require_once __DIR__ . '/vendor/autoload.php';
@@ -1296,9 +1231,20 @@ class Quotation
             $mail->setFrom(SMTP_USER, SMTP_FROM_NAME);
             $mail->addAddress($toEmail);
             $mail->Subject = $subject;
-            $mail->isHTML(true);
-            $mail->Body = $htmlBody;
-            $mail->AltBody = $plainBody;
+            // The customer should receive only the quotation PDF attachment.
+            // No HTML summary and no Accept/Reject buttons in the body.
+            $mail->AllowEmpty = true;
+            $mail->Body = '';
+            $safeNumber = preg_replace('/[^A-Za-z0-9._-]+/', '-', (string) ($quotation['quotation_no'] ?? ''));
+            if ($safeNumber === '') {
+                $safeNumber = 'Quotation-' . $quotationId;
+            }
+            $mail->addStringAttachment(
+                $pdfBytes,
+                'Quotation-' . $safeNumber . '.pdf',
+                'base64',
+                'application/pdf'
+            );
             $mail->send();
         } catch (\PHPMailer\PHPMailer\Exception $exception) {
             return ['ok' => false, 'message' => 'Unable to send the quotation email. Please check the email configuration and try again.'];
@@ -1306,11 +1252,70 @@ class Quotation
             return ['ok' => false, 'message' => 'Unable to send the quotation email. Please check the email configuration and try again.'];
         }
 
-        // Only after a successful send. This never overwrites an Accepted,
-        // Rejected or already Expired quotation.
+        // Rejected or expired quotations are reopened only after the email
+        // succeeds; customer responses are accepted only while the quote is Sent.
         $this->recordEmailSent($quotationId);
 
+        // A successful resend clears the previous rejection so the quotation is
+        // treated as Sent again and the customer can respond.
+        $clearRejection = $this->dbConnect->prepare(
+            "UPDATE {$this->quotationTable}
+             SET rejected_at = NULL, rejection_reason = NULL
+             WHERE id = ? AND user_id = ?
+               AND accepted_at IS NULL
+               AND converted_invoice_id IS NULL"
+        );
+        $clearRejection->bind_param('ii', $quotationId, $userId);
+        $clearRejection->execute();
+        $clearRejection->close();
+
         return ['ok' => true, 'message' => 'Quotation email sent successfully.'];
+    }
+
+    /**
+     * Resend a rejected or expired quotation. An expired validity date is
+     * extended by 15 days first so the resent quotation can be accepted again.
+     */
+    public function resendQuotationEmail(int $quotationId, string $toEmail = ''): array
+    {
+        $userId = $this->currentUserId();
+        if ($userId <= 0) {
+            return ['ok' => false, 'message' => 'Your session has expired. Please log in again.'];
+        }
+
+        $quotation = $this->getQuotation($quotationId);
+        if (empty($quotation)) {
+            return ['ok' => false, 'message' => 'Quotation not found.'];
+        }
+        if (!empty($quotation['is_converted']) || !empty($quotation['converted_invoice_id'])) {
+            return ['ok' => false, 'message' => 'Converted quotations cannot be emailed.'];
+        }
+        if (!empty($quotation['accepted_at'])) {
+            return ['ok' => false, 'message' => 'An accepted quotation cannot be resent.'];
+        }
+
+        $extendedUntil = '';
+        if (!empty($quotation['is_expired'])) {
+            $extendedUntil = date('Y-m-d', strtotime('+15 days'));
+            $update = $this->dbConnect->prepare(
+                "UPDATE {$this->quotationTable}
+                 SET valid_until = ?
+                 WHERE id = ? AND user_id = ?
+                   AND accepted_at IS NULL
+                   AND converted_invoice_id IS NULL"
+            );
+            $update->bind_param('sii', $extendedUntil, $quotationId, $userId);
+            $update->execute();
+            $update->close();
+        }
+
+        $result = $this->sendQuotationEmail($quotationId, $toEmail);
+        if (!empty($result['ok']) && $extendedUntil !== '') {
+            $result['message'] = 'Quotation resent successfully. Validity extended to '
+                . date('d M Y', strtotime($extendedUntil)) . '.';
+        }
+
+        return $result;
     }
 
     public function buildQuotationEmailHtml(array $quotation, array $items, string $acceptUrl, string $rejectUrl): string
@@ -1327,12 +1332,10 @@ class Quotation
 
         $rows = '';
         foreach ($items as $index => $item) {
-            $description = trim((string) ($item['product_description'] ?? ''));
             $rows .= '<tr>'
                 . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">' . ($index + 1) . '</td>'
                 . '<td style="padding:8px;border:1px solid #e2e8f0;">'
                 . '<strong>' . $e($item['product_name'] ?? '') . '</strong>'
-                . ($description !== '' ? '<div style="color:#64748b;font-size:12px;margin-top:4px;">' . nl2br($e($description)) . '</div>' : '')
                 . '</td>'
                 . '<td style="padding:8px;border:1px solid #e2e8f0;text-align:center;">'
                 . rtrim(rtrim(number_format((float) ($item['quantity'] ?? 0), 2, '.', ''), '0'), '.') . '</td>'
@@ -1345,8 +1348,10 @@ class Quotation
                 . '</tr>';
         }
 
-        $notes = trim((string) ($quotation['notes'] ?? ''));
         $terms = trim((string) ($quotation['terms_conditions'] ?? ''));
+        if ($terms === '') {
+            $terms = 'Thanks for doing business with us!';
+        }
 
         $html = '<!DOCTYPE html><html><head><meta charset="UTF-8">'
             . '<title>Quotation ' . $e($quotation['quotation_no'] ?? '') . '</title></head>'
@@ -1373,7 +1378,7 @@ class Quotation
             . '<table style="width:100%;border-collapse:collapse;font-size:13px;margin-bottom:18px;">'
             . '<thead><tr style="background:#1f4e79;color:#ffffff;">'
             . '<th style="padding:8px;border:1px solid #1f4e79;">#</th>'
-            . '<th style="padding:8px;border:1px solid #1f4e79;text-align:left;">Product / Service</th>'
+            . '<th style="padding:8px;border:1px solid #1f4e79;text-align:left;">Description</th>'
             . '<th style="padding:8px;border:1px solid #1f4e79;">Qty</th>'
             . '<th style="padding:8px;border:1px solid #1f4e79;">Unit Price</th>'
             . '<th style="padding:8px;border:1px solid #1f4e79;">Discount</th>'
@@ -1395,12 +1400,12 @@ class Quotation
             . '<td style="padding:8px 0;font-weight:bold;text-align:right;border-top:2px solid #1f4e79;">' . $e($symbol) . ' ' . number_format((float) ($quotation['grand_total'] ?? 0), 2) . '</td></tr>'
             . '</table>';
 
-        if ($notes !== '') {
-            $html .= '<div style="margin-top:18px;"><strong style="color:#1f4e79;">Notes</strong><div style="font-size:13px;line-height:1.6;">' . nl2br($e($notes)) . '</div></div>';
+        $html .= '<div style="margin-top:14px;"><strong style="color:#1f4e79;">Terms &amp; Conditions</strong><div style="font-size:13px;line-height:1.6;">' . nl2br($e($terms)) . '</div></div>'
+            . '<div style="margin-top:14px;"><strong style="color:#1f4e79;">Bank Details</strong><div style="font-size:13px;line-height:1.6;">';
+        foreach (self::bankDetails() as $bankLabel => $bankValue) {
+            $html .= '<div><strong>' . $e($bankLabel) . ':</strong> ' . $e($bankValue) . '</div>';
         }
-        if ($terms !== '') {
-            $html .= '<div style="margin-top:14px;"><strong style="color:#1f4e79;">Terms &amp; Conditions</strong><div style="font-size:13px;line-height:1.6;">' . nl2br($e($terms)) . '</div></div>';
-        }
+        $html .= '</div></div>';
 
         $html .= '<div style="margin-top:26px;padding:18px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">'
             . '<h2 style="font-size:16px;margin:0 0 8px;color:#1f4e79;">Your Response</h2>'
@@ -1425,38 +1430,6 @@ class Quotation
      * Status and conversion
      * ------------------------------------------------------------------ */
 
-    public function updateStatus(int $quotationId, string $newStatus): bool
-    {
-        $quotation = $this->getQuotation($quotationId);
-        if (empty($quotation)) {
-            throw new InvalidArgumentException('Quotation not found.');
-        }
-        if (!in_array($newStatus, self::STATUSES, true) || $newStatus === 'Converted') {
-            throw new InvalidArgumentException('Invalid quotation status.');
-        }
-        if ($quotation['status'] === 'Converted') {
-            throw new InvalidArgumentException('Converted quotations cannot change status.');
-        }
-        // Accepted can only be recorded by the customer response link, so a
-        // manual dropdown/API change can never fabricate an acceptance event.
-        if ($newStatus === 'Accepted' && $quotation['status'] !== 'Accepted') {
-            throw new InvalidArgumentException('Quotations can only be accepted by the customer through the secure acceptance link.');
-        }
-        if (!in_array($newStatus, self::allowedTransitions($quotation['status']), true)) {
-            throw new InvalidArgumentException('That status change is not allowed.');
-        }
-
-        $userId = $this->currentUserId();
-        $stmt = $this->dbConnect->prepare(
-            "UPDATE {$this->quotationTable} SET status = ? WHERE id = ? AND user_id = ?"
-        );
-        $stmt->bind_param('sii', $newStatus, $quotationId, $userId);
-        $stmt->execute();
-        $ok = $stmt->affected_rows >= 0;
-        $stmt->close();
-        return $ok;
-    }
-
     /**
      * Mark an accepted quotation as converted after the invoice has actually
      * been saved from the Create Invoice page. The guard conditions make the
@@ -1471,9 +1444,9 @@ class Quotation
 
         $stmt = $this->dbConnect->prepare(
             "UPDATE {$this->quotationTable}
-             SET status = 'Converted', converted_invoice_id = ?
+             SET converted_invoice_id = ?
              WHERE id = ? AND user_id = ?
-               AND status = 'Accepted'
+               AND (accepted_at IS NOT NULL OR status = 'Accepted')
                AND converted_invoice_id IS NULL"
         );
         $stmt->bind_param('iii', $invoiceId, $quotationId, $userId);
@@ -1516,7 +1489,7 @@ class Quotation
             if (!empty($quotation['converted_invoice_id'])) {
                 throw new InvalidArgumentException('This quotation has already been converted.');
             }
-            if ($quotation['status'] !== 'Accepted') {
+            if (empty($quotation['accepted_at']) && $quotation['status'] !== 'Accepted') {
                 throw new InvalidArgumentException('Only accepted quotations can be converted to an invoice.');
             }
 
@@ -1615,8 +1588,8 @@ class Quotation
 
             $updateQuotation = $this->dbConnect->prepare(
                 "UPDATE {$this->quotationTable}
-                 SET status = 'Converted', converted_invoice_id = ?
-                 WHERE id = ? AND user_id = ?"
+                 SET converted_invoice_id = ?
+                 WHERE id = ? AND user_id = ? AND converted_invoice_id IS NULL"
             );
             $updateQuotation->bind_param('iii', $invoiceId, $quotationId, $userId);
             if (!$updateQuotation->execute()) {
@@ -1650,7 +1623,6 @@ class Quotation
                     $checkStmt->close();
 
                     $keepInvoice = !empty($checkRow)
-                        && $checkRow['status'] === 'Converted'
                         && intval($checkRow['converted_invoice_id']) === $createdInvoiceId;
 
                     if (!$keepInvoice) {
@@ -1686,12 +1658,19 @@ class Quotation
         $map = [
             'Draft' => 'secondary',
             'Sent' => 'info',
-            'Accepted' => 'success',
-            'Rejected' => 'danger',
-            'Expired' => 'warning',
-            'Converted' => 'primary',
         ];
         return $map[$status] ?? 'secondary';
+    }
+
+    public static function bankDetails(): array
+    {
+        return [
+            'Receiver Name' => 'PAVITHA CONSULTANCY SERVICES OPC Pvt Ltd',
+            'Bank Name' => 'FEDERAL BANK, SURANDAI',
+            'Account Number' => '17480200004021',
+            'IFSC' => 'FDRL0001748',
+            'SWIFT Code' => 'FDRLINBBIBD',
+        ];
     }
 
     public static function currencySymbol(string $currency): string

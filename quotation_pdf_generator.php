@@ -23,7 +23,6 @@ function buildQuotationHtml(array $quotation, array $items): string
     $currencySymbol = Quotation::currencySymbol($currency);
     $quotationDate = quotationPdfDate($quotation['quotation_date'] ?? '');
     $validUntil = quotationPdfDate($quotation['valid_until'] ?? '');
-    $status = (string) ($quotation['status'] ?? 'Draft');
     $grandTotal = floatval($quotation['grand_total'] ?? 0);
     $pdfTaxAmount = round(floatval($quotation['tax_amount'] ?? 0), 2);
     $pdfCgst = round($pdfTaxAmount / 2, 2);
@@ -42,7 +41,6 @@ function buildQuotationHtml(array $quotation, array $items): string
     $customerAddress = trim((string) ($quotation['customer_address'] ?? ''));
     $customerEmail = trim((string) ($quotation['customer_email'] ?? ''));
     $customerPhone = trim((string) ($quotation['customer_phone'] ?? ''));
-    $notes = trim((string) ($quotation['notes'] ?? ''));
     $terms = trim((string) ($quotation['terms_conditions'] ?? ''));
     if ($terms === '') {
         $terms = 'Thanks for doing business with us!';
@@ -55,58 +53,57 @@ function buildQuotationHtml(array $quotation, array $items): string
     <meta charset="UTF-8">
     <title>Quotation - ' . quotationPdfHtml($quotation['quotation_no'] ?? '') . '</title>
     <style>
-        @page { margin: 22px; }
-        body { font-family: "DejaVu Sans", sans-serif; font-size: 10.5px; color: #333; margin: 0; padding: 0; line-height: 1.45; }
-        .header-table { width: 100%; border: none; margin-bottom: 4px; }
-        .header-left { width: 70%; vertical-align: top; }
-        .header-right { width: 30%; text-align: right; vertical-align: top; }
-        .company-name { font-size: 17px; font-weight: bold; color: #1f4e79; margin: 0; padding: 0; }
-        .company-subtitle { font-size: 10px; font-weight: bold; color: #444; margin-bottom: 4px; }
-        .company-details { font-size: 8.5px; color: #555; line-height: 1.5; }
-        .logo { width: 125px; }
-        .divider { border-top: 2px solid #1f4e79; margin: 9px 0; height: 0; }
-        .title-section { text-align: center; margin: 8px 0 12px; }
-        .title-section h1 { font-size: 18px; text-transform: uppercase; margin: 0; color: #1f4e79; letter-spacing: 1.4px; }
+        @page { margin: 20px; }
+        body { font-family: "DejaVu Sans", sans-serif; font-size: 11px; color: #333; margin: 0; padding: 0; line-height: 1.4; }
+        .header-table { width: 100%; border: none; margin-bottom: 5px; }
+        .header-left { width: 65%; vertical-align: top; }
+        .header-right { width: 35%; text-align: right; vertical-align: top; }
+        .company-name { font-size: 18px; font-weight: bold; color: #1f4e79; margin: 0; padding: 0; }
+        .company-subtitle { font-size: 11px; font-weight: bold; color: #444; margin-bottom: 5px; }
+        .company-details { font-size: 9px; color: #555; }
+        .logo { width: 120px; }
+        .divider { border-top: 1px solid #1f4e79; margin: 10px 0; height: 0; }
+        .title-section { text-align: center; margin: 10px 0; }
+        .title-section h1 { font-size: 16px; text-transform: uppercase; margin: 0; color: #000; letter-spacing: 1px; }
         .title-section .subtitle { font-size: 9px; color: #666; margin-top: 3px; }
-        .info-table { width: 100%; margin: 10px 0 14px; border: none; }
+        .info-table { width: 100%; margin: 15px 0; border: none; }
         .info-table td { vertical-align: top; border: none; padding: 0; }
-        .info-left { width: 58%; padding-right: 15px; }
-        .info-right { width: 42%; }
-        .section-label { font-weight: bold; font-size: 10px; color: #1f4e79; text-transform: uppercase; letter-spacing: .5px; margin-bottom: 4px; }
-        .customer-name { font-weight: bold; font-size: 12.5px; margin-bottom: 2px; }
-        .customer-line { color: #555; font-size: 9.5px; line-height: 1.5; }
-        .meta-table { width: 100%; border-collapse: collapse; }
+        .info-left { width: 60%; padding-right: 15px; }
+        .info-right { width: 40%; }
+        .section-label { font-weight: bold; font-size: 12px; color: #1f4e79; margin-bottom: 5px; }
+        .customer-name { font-weight: bold; font-size: 13px; margin-bottom: 2px; }
+        .customer-line { color: #555; font-size: 10px; line-height: 1.5; }
+        .meta-table { width: 100%; }
         .meta-table td { padding: 2px 0; border: none; vertical-align: top; }
-        .meta-label { font-weight: bold; color: #444; width: 95px; }
-        .items-table { width: 100%; border-collapse: collapse; margin-top: 6px; }
-        .items-table th { background-color: #1f4e79; color: #ffffff; padding: 7px 5px; text-align: center; font-weight: bold; border: 1px solid #1f4e79; font-size: 9px; }
-        .items-table td { padding: 6px 5px; border: 1px solid #d9e2ee; vertical-align: top; font-size: 9.5px; }
+        .meta-label { font-weight: bold; color: #444; width: 100px; }
+        .items-table { width: 100%; border-collapse: collapse; margin-top: 10px; }
+        .items-table th { background-color: #1f4e79; color: #ffffff; padding: 10px 5px; text-align: center; font-weight: bold; border: none; }
+        .items-table td { padding: 10px 5px; border: none; vertical-align: top; }
         .items-table .description { text-align: left; }
-        .items-table .item-description { color: #666; font-size: 8.5px; margin-top: 2px; }
+        .items-table .item-description { color: #666; font-size: 9px; margin-top: 2px; }
         .text-right { text-align: right; }
         .text-center { text-align: center; }
         .bold { font-weight: bold; }
-        .summary-table { width: 100%; margin-top: 12px; border: none; }
+        .summary-table { width: 100%; margin-top: 15px; border: none; }
         .summary-table td { vertical-align: top; border: none; padding: 0; }
-        .summary-left { width: 55%; padding-right: 18px; }
+        .summary-left { width: 55%; padding-right: 15px; }
         .summary-right { width: 45%; }
         .totals-table { width: 100%; border-collapse: collapse; }
-        .totals-table td { padding: 4px 5px; border: none; }
-        .totals-label { text-align: right; padding-right: 12px; width: 62%; color: #444; }
-        .totals-value { text-align: right; width: 38%; font-weight: bold; white-space: nowrap; }
+        .totals-table td { padding: 5px; border: none; }
+        .totals-label { text-align: right; padding-right: 15px; width: 60%; color: #444; }
+        .totals-value { text-align: right; width: 40%; font-weight: bold; white-space: nowrap; }
         .grand-total-box { background-color: #1f4e79; color: #fff; }
-        .grand-total-box td { padding: 7px 5px; font-size: 12px; }
-        .amount-words { margin-top: 10px; font-size: 9.5px; }
+        .grand-total-box td { padding: 8px 5px; font-size: 12px; }
+        .amount-words { margin-top: 20px; font-size: 10px; }
         .amount-words .label { font-weight: bold; }
         .amount-words .words { font-style: italic; color: #444; }
-        .notes-section { margin-top: 14px; }
+        .notes-section { margin-top: 30px; }
         .notes-title { font-weight: bold; color: #1f4e79; text-decoration: underline; margin-bottom: 3px; }
         .notes-body { color: #444; font-size: 9.5px; }
-        .footer-table { width: 100%; margin-top: 30px; border: none; }
+        .footer-table { width: 100%; margin-top: 40px; border: none; }
         .footer-table td { vertical-align: bottom; border: none; }
-        .auth-section { text-align: right; padding-top: 28px; }
+        .auth-section { text-align: right; padding-top: 50px; }
         .computer-note { color: #888; font-size: 8px; margin-top: 24px; text-align: center; }
-        .status-text { font-weight: bold; color: #1f4e79; }
     </style>
 </head>
 <body>
@@ -168,10 +165,6 @@ function buildQuotationHtml(array $quotation, array $items): string
                     <td class="meta-label">Valid Until:</td>
                     <td>' . quotationPdfHtml($validUntil) . '</td>
                 </tr>
-                <tr>
-                    <td class="meta-label">Status:</td>
-                    <td class="status-text">' . quotationPdfHtml($status) . '</td>
-                </tr>
             </table>
         </td>
     </tr>
@@ -192,16 +185,11 @@ function buildQuotationHtml(array $quotation, array $items): string
 
     $count = 1;
     foreach ($items as $item) {
-        $description = (string) ($item['product_description'] ?? '');
         $output .= '
         <tr>
             <td class="text-center">' . $count++ . '</td>
             <td class="description">
-                <div class="bold">' . quotationPdfHtml($item['product_name'] ?? '') . '</div>';
-        if ($description !== '') {
-            $output .= '<div class="item-description">' . nl2br(quotationPdfHtml($description)) . '</div>';
-        }
-        $output .= '
+                <div class="bold">' . quotationPdfHtml($item['product_name'] ?? '') . '</div>
             </td>
             <td class="text-center">' . rtrim(rtrim(number_format(floatval($item['quantity'] ?? 0), 2, '.', ''), '0'), '.') . '</td>
             <td class="text-right">' . number_format(floatval($item['unit_price'] ?? 0), 2) . '</td>
@@ -232,15 +220,18 @@ function buildQuotationHtml(array $quotation, array $items): string
             <div class="notes-section">
                 <div class="notes-title">Terms &amp; Conditions</div>
                 <div class="notes-body">' . nl2br(quotationPdfHtml($terms)) . '</div>
-            </div>';
+            </div>
 
-    if ($notes !== '') {
-        $output .= '
             <div class="notes-section">
-                <div class="notes-title">Notes</div>
-                <div class="notes-body">' . nl2br(quotationPdfHtml($notes)) . '</div>
-            </div>';
+                <div class="notes-title">Bank Details</div>
+                <div class="notes-body">';
+    foreach (Quotation::bankDetails() as $bankLabel => $bankValue) {
+        $output .= '<div><strong>' . quotationPdfHtml($bankLabel) . ':</strong> '
+            . quotationPdfHtml($bankValue) . '</div>';
     }
+    $output .= '
+                </div>
+            </div>';
 
     $output .= '
         </td>

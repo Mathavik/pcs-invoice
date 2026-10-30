@@ -125,3 +125,17 @@ SET @sql := IF(@has_public_token_index = 0,
 PREPARE stmt FROM @sql;
 EXECUTE stmt;
 DEALLOCATE PREPARE stmt;
+
+-- Keep the lifecycle status limited to Draft/Sent. Customer decisions and
+-- conversion remain recorded in their dedicated timestamp/id columns.
+UPDATE `quotation`
+SET `accepted_at` = COALESCE(`accepted_at`, `updated_at`)
+WHERE `status` = 'Accepted';
+
+UPDATE `quotation`
+SET `rejected_at` = COALESCE(`rejected_at`, `updated_at`)
+WHERE `status` = 'Rejected';
+
+UPDATE `quotation`
+SET `status` = CASE WHEN `status` = 'Draft' THEN 'Draft' ELSE 'Sent' END
+WHERE `status` IS NULL OR `status` NOT IN ('Draft', 'Sent');

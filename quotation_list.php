@@ -34,11 +34,6 @@ if (!function_exists('pcs_quotation_h')) {
         return Quotation::currencySymbol((string) $currency) . ' ' . number_format((float) $amount, 2);
     }
 
-    function pcs_quotation_status_class($status): string
-    {
-        return 'status-' . strtolower((string) $status);
-    }
-
     function pcs_quotation_page_numbers(int $currentPage, int $totalPages): array
     {
         if ($totalPages <= 1) {
@@ -69,7 +64,7 @@ if (!function_exists('pcs_quotation_h')) {
         if ($total === 0) {
             return 'No quotations found.';
         }
-        $perPage = max(1, intval($data['perPage'] ?? 10));
+        $perPage = max(1, intval($data['perPage'] ?? 5));
         $currentPage = max(1, intval($data['currentPage'] ?? 1));
         $first = (($currentPage - 1) * $perPage) + 1;
         $last = min($total, $first + $perPage - 1);
@@ -84,16 +79,13 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['ajax'])) {
     try {
         $filters = isset($_POST['filters']) && is_array($_POST['filters']) ? $_POST['filters'] : [];
         $page = max(1, intval($_POST['page'] ?? 1));
-        $result = $quotationService->getQuotationList($filters, $page, 10);
+        $result = $quotationService->getQuotationList($filters, $page, 5);
 
         foreach ($result['quotations'] as &$quotationRow) {
             // The public response token is a credential and is not needed by
             // the management list UI.
             unset($quotationRow['public_token']);
             $quotationRow['whatsapp'] = Quotation::formatWhatsAppNumber($quotationRow['customer_phone'] ?? '');
-            $quotationRow['quotation_date_display'] = html_entity_decode(pcs_quotation_date($quotationRow['quotation_date'] ?? ''), ENT_QUOTES, 'UTF-8');
-            $quotationRow['valid_until_display'] = html_entity_decode(pcs_quotation_date($quotationRow['valid_until'] ?? ''), ENT_QUOTES, 'UTF-8');
-            $quotationRow['grand_total_display'] = pcs_quotation_money($quotationRow['grand_total'] ?? 0, $quotationRow['currency'] ?? 'INR');
         }
         unset($quotationRow);
 
@@ -106,7 +98,7 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && isset($_POST['ajax'])) {
     exit;
 }
 
-$initialData = $quotationService->getQuotationList([], 1, 10);
+$initialData = $quotationService->getQuotationList([], 1, 5);
 $initialQuotations = $initialData['quotations'];
 $initialCurrentPage = intval($initialData['currentPage']);
 $initialTotalPages = intval($initialData['totalPages']);
@@ -205,7 +197,9 @@ $csrfToken = Quotation::csrfToken();
                                 <?php foreach ($initialQuotations as $quotationRow):
                                     $quotationId = intval($quotationRow['id']);
                                     $status = (string) $quotationRow['status'];
-                                    $isConverted = $status === 'Converted';
+                                    $isConverted = !empty($quotationRow['is_converted'])
+                                        || !empty($quotationRow['converted_invoice_id']);
+                                    $canEdit = !$isConverted;
                                     $whatsApp = Quotation::formatWhatsAppNumber($quotationRow['customer_phone'] ?? '');
                                 ?>
                                     <tr id="quotationRow_<?php echo $quotationId; ?>"
@@ -219,13 +213,17 @@ $csrfToken = Quotation::csrfToken();
                                         data-currency="<?php echo pcs_quotation_h($quotationRow['currency'] ?? 'INR'); ?>"
                                         data-quotation-date="<?php echo pcs_quotation_h($quotationRow['quotation_date']); ?>"
                                         data-valid-until="<?php echo pcs_quotation_h($quotationRow['valid_until']); ?>">
-                                        <td class="fw-semibold"><?php echo pcs_quotation_h($quotationRow['quotation_no']); ?></td>
+                                        <td class="fw-semibold">
+                                            <a href="quotation_view.php?id=<?php echo $quotationId; ?>">
+                                                <?php echo pcs_quotation_h($quotationRow['quotation_no']); ?>
+                                            </a>
+                                        </td>
                                         <td><?php echo pcs_quotation_h($quotationRow['customer_name']); ?></td>
-                                        <td><?php echo pcs_quotation_date($quotationRow['quotation_date']); ?></td>
-                                        <td><?php echo pcs_quotation_date($quotationRow['valid_until']); ?></td>
-                                        <td><?php echo pcs_quotation_money($quotationRow['grand_total'], $quotationRow['currency'] ?? 'INR'); ?></td>
+                                        <td><?php echo pcs_quotation_date($quotationRow['quotation_date'] ?? ''); ?></td>
+                                        <td><?php echo pcs_quotation_date($quotationRow['valid_until'] ?? ''); ?></td>
+                                        <td><?php echo pcs_quotation_money($quotationRow['grand_total'] ?? 0, $quotationRow['currency'] ?? 'INR'); ?></td>
                                         <td>
-                                            <span class="quotation-status <?php echo pcs_quotation_h(pcs_quotation_status_class($status)); ?>">
+                                            <span class="quotation-status <?php echo pcs_quotation_h('status-' . strtolower($status)); ?>">
                                                 <?php echo pcs_quotation_h($status); ?>
                                             </span>
                                         </td>
@@ -247,7 +245,7 @@ $csrfToken = Quotation::csrfToken();
                                             </button>
                                         </td>
                                         <td class="quotation-actions">
-                                            <?php if ($isConverted): ?>
+                                            <?php if (!$canEdit): ?>
                                                 <span class="disabled" title="Converted quotations cannot be edited">
                                                     <i class="bi bi-pencil"></i>
                                                 </span>
@@ -417,10 +415,6 @@ $csrfToken = Quotation::csrfToken();
         });
     }
 
-    function statusClass(status) {
-        return 'status-' + String(status || '').toLowerCase();
-    }
-
     function pageNumbers(current, total) {
         var pages = [];
         if (total <= 1) {
@@ -452,9 +446,10 @@ $csrfToken = Quotation::csrfToken();
     function tableRow(quotation) {
         var id = Number(quotation.id);
         var status = String(quotation.status || 'Draft');
-        var converted = status === 'Converted';
+        var converted = Boolean(quotation.is_converted || quotation.converted_invoice_id);
+        var canEdit = !converted;
         var whatsApp = quotation.whatsapp || '';
-        var editAction = converted
+        var editAction = !canEdit
             ? '<span class="disabled" title="Converted quotations cannot be edited"><i class="bi bi-pencil"></i></span>'
             : '<a href="edit_quotation.php?update_id=' + id + '" title="Edit quotation"><i class="bi bi-pencil"></i></a>';
         var deleteAction = converted
@@ -472,12 +467,12 @@ $csrfToken = Quotation::csrfToken();
             ' data-currency="' + escapeHtml(quotation.currency || 'INR') + '"' +
             ' data-quotation-date="' + escapeHtml(quotation.quotation_date) + '"' +
             ' data-valid-until="' + escapeHtml(quotation.valid_until) + '">' +
-            '<td class="fw-semibold">' + escapeHtml(quotation.quotation_no) + '</td>' +
+            '<td class="fw-semibold"><a href="quotation_view.php?id=' + id + '">' + escapeHtml(quotation.quotation_no) + '</a></td>' +
             '<td>' + escapeHtml(quotation.customer_name) + '</td>' +
-            '<td>' + escapeHtml(quotation.quotation_date_display || formatDate(quotation.quotation_date)) + '</td>' +
-            '<td>' + escapeHtml(quotation.valid_until_display || formatDate(quotation.valid_until)) + '</td>' +
-            '<td>' + escapeHtml(quotation.grand_total_display || formatMoney(quotation.grand_total, quotation.currency)) + '</td>' +
-            '<td><span class="quotation-status ' + escapeHtml(statusClass(status)) + '">' + escapeHtml(status) + '</span></td>' +
+            '<td>' + escapeHtml(formatDate(quotation.quotation_date)) + '</td>' +
+            '<td>' + escapeHtml(formatDate(quotation.valid_until)) + '</td>' +
+            '<td>' + escapeHtml(formatMoney(quotation.grand_total, quotation.currency)) + '</td>' +
+            '<td><span class="quotation-status status-' + escapeHtml(status.toLowerCase()) + '">' + escapeHtml(status) + '</span></td>' +
             '<td class="quotation-actions"><a href="quotation_view.php?id=' + id + '" title="View quotation"><i class="bi bi-eye"></i></a></td>' +
             '<td class="quotation-actions"><a href="quotation_pdf.php?id=' + id + '" target="_blank" rel="noopener" title="Print quotation"><i class="bi bi-printer"></i></a></td>' +
             '<td class="quotation-actions"><button type="button" class="btn btn-link p-0 shareQuotation" data-id="' + id + '" title="Share quotation"><i class="bi bi-share"></i></button></td>' +
@@ -565,7 +560,7 @@ $csrfToken = Quotation::csrfToken();
             currentPage = Number(response.currentPage) || 1;
             renderTable(response.quotations || []);
             renderPagination(Number(response.totalPages) || 0, currentPage);
-            renderSummary(Number(response.total) || 0, Number(response.perPage) || 10, currentPage);
+            renderSummary(Number(response.total) || 0, Number(response.perPage) || 5, currentPage);
         }).fail(function (xhr) {
             var message = xhr.responseJSON && xhr.responseJSON.error
                 ? xhr.responseJSON.error

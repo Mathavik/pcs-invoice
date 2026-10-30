@@ -74,8 +74,8 @@
 }
 
 .quotation-table tbody td {
-    padding: 12px 10px;
-    border-bottom: 1px solid #edf0f5;
+    padding: 10px;
+    border-bottom: 1px solid #ddd;
     vertical-align: middle;
     font-size: .9rem;
 }

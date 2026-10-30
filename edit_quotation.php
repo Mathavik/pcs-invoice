@@ -15,7 +15,7 @@ $customerSuggestions = $quotationService->getCustomerSuggestions();
 $pageError = '';
 if (empty($quotationRecord)) {
     $pageError = 'The quotation you are trying to edit could not be found.';
-} elseif ($quotationRecord['status'] === 'Converted') {
+} elseif (!empty($quotationRecord['is_converted']) || !empty($quotationRecord['converted_invoice_id'])) {
     header('Location: quotation_view.php?id=' . $quotationId . '&notice=converted');
     exit;
 }
@@ -50,29 +50,47 @@ $formErrors = [];
 $formMode = 'edit';
 $quotationData = $quotationRecord;
 $actionUrl = 'edit_quotation.php?update_id=' . $quotationId;
-$statusOptions = array_values(array_filter(
-    Quotation::allowedTransitions($quotationRecord['status']),
-    static function ($status) {
-        return !in_array($status, ['Converted', 'Accepted'], true);
-    }
-));
 
 if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
     if (!Quotation::validateCsrf($_POST['csrf_token'] ?? '')) {
         $formErrors[] = 'Your session security token has expired. Please refresh the page and try again.';
     } else {
+        // Status is managed by the workflow. Editing must not change it, so the
+        // stored Draft/Sent value is carried forward automatically.
+        $_POST['status'] = in_array($quotationRecord['status'] ?? '', Quotation::statuses(), true)
+            ? (string) $quotationRecord['status']
+            : 'Draft';
         // Notes can only be set on the create page; keep the saved value when
         // editing so removing the field from the form never clears it.
         $_POST['notes'] = (string) ($quotationRecord['notes'] ?? '');
 
         $prepared = $quotationService->preparePayload($_POST, true, $quotationId);
-        $formErrors = $prepared['errors'];
+        $formErrors = array_merge($formErrors, $prepared['errors']);
 
         if (empty($formErrors)) {
             try {
+                $canSendFromEdit = ($quotationRecord['status'] ?? '') === 'Draft'
+                    || !empty($quotationRecord['is_rejected'])
+                    || !empty($quotationRecord['is_expired']);
+                if (($_POST['quotation_action'] ?? '') === 'save_and_resend' && !$canSendFromEdit) {
+                    throw new InvalidArgumentException('Sending is available only for Draft, rejected or expired quotations.');
+                }
                 $quotationService->updateQuotation($quotationId, $_POST);
-                header('Location: quotation_view.php?id=' . $quotationId . '&updated=1');
-                exit;
+                if (($_POST['quotation_action'] ?? '') === 'save_and_resend') {
+                    $emailResult = $quotationService->resendQuotationEmail(
+                        $quotationId,
+                        trim((string) ($_POST['customer_email'] ?? ''))
+                    );
+                    if (empty($emailResult['ok'])) {
+                        $formErrors[] = (string) ($emailResult['message'] ?? 'Quotation was saved, but the email could not be sent.');
+                    } else {
+                        header('Location: quotation_view.php?id=' . $quotationId . '&updated=1&sent=1');
+                        exit;
+                    }
+                } else {
+                    header('Location: quotation_view.php?id=' . $quotationId . '&updated=1');
+                    exit;
+                }
             } catch (Throwable $exception) {
                 $formErrors[] = $exception->getMessage();
             }
@@ -88,18 +106,14 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST') {
         'customer_email',
         'customer_address',
         'gst_type',
+        'status',
         'notes',
         'terms_conditions',
     ] as $field) {
-        if (isset($_POST[$field]) && is_scalar($_POST[$field])) {
+        if (isset($_POST[$field]) && is_scalar($_POST[$field])
+            && ($field !== 'status' || in_array($_POST[$field], Quotation::statuses(), true))) {
             $quotationData[$field] = (string) $_POST[$field];
         }
-    }
-
-    if (isset($_POST['status'])
-        && in_array($_POST['status'], $statusOptions, true)
-        && $_POST['status'] !== 'Converted') {
-        $quotationData['status'] = (string) $_POST['status'];
     }
 
     $postedItems = Quotation::itemsFromPost($_POST);

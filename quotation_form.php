@@ -1,7 +1,7 @@
 <?php
 /**
  * Shared create/edit quotation form. Expects:
- * $quotation, $formItems, $formErrors, $statusOptions, $csrfToken,
+ * $quotation, $formItems, $formErrors, $csrfToken,
  * $formMode ('create'|'edit'), $actionUrl, optional $cancelUrl.
  */
 if (!defined('QUOTATION_FORM_INCLUDED')) {
@@ -11,19 +11,12 @@ if (!defined('QUOTATION_FORM_INCLUDED')) {
 $formMode = $formMode ?? 'create';
 $isEdit = $formMode === 'edit';
 $formErrors = isset($formErrors) && is_array($formErrors) ? $formErrors : [];
-$statusOptions = isset($statusOptions) && is_array($statusOptions) ? $statusOptions : ['Draft', 'Sent'];
 $csrfToken = $csrfToken ?? '';
 $actionUrl = $actionUrl ?? ($isEdit ? 'edit_quotation.php' : 'create_quotation.php');
 $cancelUrl = $cancelUrl ?? 'main.php?page=quotation_list';
 $currencySymbol = Quotation::currencySymbol('INR');
 
-if (empty($statusOptions)) {
-    $statusOptions = ['Draft', 'Sent'];
-}
 $currentStatus = (string) ($quotation['status'] ?? 'Draft');
-if (!in_array($currentStatus, $statusOptions, true) && $currentStatus !== 'Converted') {
-    $statusOptions[] = $currentStatus;
-}
 
 $quotation = array_merge([
     'quotation_no' => '',
@@ -36,9 +29,20 @@ $quotation = array_merge([
     'currency' => 'INR',
     'gst_type' => 'with_gst',
     'status' => 'Draft',
-    'notes' => '',
     'terms_conditions' => '',
 ], is_array($quotation ?? null) ? $quotation : []);
+
+if (trim((string) ($quotation['terms_conditions'] ?? '')) === '') {
+    $quotation['terms_conditions'] = 'Thanks for doing business with us!';
+}
+
+$displayStatus = !empty($quotation['is_converted'])
+    ? 'Converted'
+    : (!empty($quotation['is_accepted'])
+        ? 'Accepted'
+        : (!empty($quotation['is_rejected'])
+            ? 'Rejected'
+            : (!empty($quotation['is_expired']) ? 'Expired' : $currentStatus)));
 
 if (empty($formItems) || !is_array($formItems)) {
     $formItems = [[]];
@@ -51,6 +55,7 @@ $e = static function ($value): string {
 $totals = ['subtotal' => 0.0, 'discount' => 0.0, 'cgst' => 0.0, 'sgst' => 0.0, 'tax' => 0.0, 'grand' => 0.0];
 $formItems = array_values($formItems);
 $formGstType = (($quotation['gst_type'] ?? 'with_gst') === 'without_gst') ? 'without_gst' : 'with_gst';
+$itemTaxRate = $formGstType === 'with_gst' ? 18 : 0;
 $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggestions)
     ? $customerSuggestions : [];
 ?>
@@ -119,7 +124,7 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                         </div>
                     </div>
                     <div class="col-md-3 mb-3">
-                        <label class="form-label font-weight-bold" for="customer_phone">Phone / WhatsApp</label>
+                        <label class="form-label font-weight-bold" for="customer_phone">Phone / WhatsApp <span class="text-muted font-weight-normal">(Optional)</span></label>
                         <input type="text" class="form-control" id="customer_phone" name="customer_phone"
                             maxlength="20" value="<?php echo $e($quotation['customer_phone']); ?>"
                             placeholder="+91 98765 43210">
@@ -140,14 +145,10 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                 <?php if ($isEdit): ?>
                     <div class="row">
                         <div class="col-md-3 mb-3">
-                            <label class="form-label font-weight-bold" for="status">Status</label>
-                            <select class="form-control" id="status" name="status">
-                                <?php foreach ($statusOptions as $status): ?>
-                                    <option value="<?php echo $e($status); ?>" <?php echo $currentStatus === $status ? 'selected' : ''; ?>>
-                                        <?php echo $e($status); ?>
-                                    </option>
-                                <?php endforeach; ?>
-                            </select>
+                            <label class="form-label font-weight-bold" for="status_display">Status</label>
+                            <input type="text" class="form-control" id="status_display"
+                                value="<?php echo $e($displayStatus); ?>" readonly>
+                            <small class="form-text text-muted">Status updates automatically.</small>
                         </div>
                     </div>
                 <?php endif; ?>
@@ -186,9 +187,6 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                         <h4 class="h5 font-weight-bold text-dark mb-1">Products / Services</h4>
                         <p class="text-muted mb-0 small">Add each product or service on its own row.</p>
                     </div>
-                    <button type="button" class="btn btn-primary mt-2 mt-sm-0" id="addItemRow">
-                        <i class="bi bi-plus-circle"></i> Add Row
-                    </button>
                 </div>
 
                 <div class="table-responsive mb-4">
@@ -196,13 +194,12 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                         <thead>
                             <tr>
                                 <th style="width: 45px;">#</th>
-                                <th style="min-width: 180px;">Product / Service *</th>
-                                <th style="min-width: 200px;">Description</th>
+                                <th style="min-width: 220px;">Description *</th>
                                 <th style="width: 85px;">Qty *</th>
                                 <th style="width: 120px;">Unit Price *</th>
                                 <th style="width: 110px;">Discount</th>
-                                <th style="width: 110px;">Discount</th>
-                                <th style="width: 125px;">Line Total</th>
+                                <th style="width: 85px;">Tax %</th>
+                                <th style="width: 125px;">Total</th>
                                 <th style="width: 55px;"></th>
                             </tr>
                         </thead>
@@ -210,7 +207,6 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                             <?php foreach ($formItems as $index => $item):
                                 $item = array_merge([
                                     'product_name' => '',
-                                    'product_description' => '',
                                     'quantity' => 1,
                                     'unit_price' => 0,
                                     'discount' => 0,
@@ -233,12 +229,7 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                                         <input type="text" class="form-control item-name" name="product_name[]"
                                             data-field="product_name" maxlength="255"
                                             value="<?php echo $e($item['product_name']); ?>"
-                                            placeholder="Product or service" required>
-                                    </td>
-                                    <td>
-                                        <textarea class="form-control item-description" name="product_description[]"
-                                            data-field="product_description" rows="2" maxlength="2000"
-                                            placeholder="Optional details"><?php echo $e($item['product_description']); ?></textarea>
+                                            placeholder="Item description" required>
                                     </td>
                                     <td>
                                         <input type="number" class="form-control item-qty" name="quantity[]"
@@ -255,6 +246,10 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                                             data-field="discount" min="0" step="0.01"
                                             value="<?php echo $e($item['discount']); ?>">
                                     </td>
+                                    <td>
+                                        <input type="number" class="form-control item-tax" name="tax_percent[]"
+                                            data-field="tax_percent" value="<?php echo $itemTaxRate; ?>" readonly>
+                                    </td>
                                     <td class="text-right line-total"><?php echo $e($currencySymbol . ' ' . number_format($lineTotal, 2)); ?></td>
                                     <td class="text-center">
                                         <button type="button" class="btn btn-sm btn-outline-danger removeItemRow"
@@ -268,17 +263,18 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                     </table>
                 </div>
 
+                <div class="mb-4">
+                    <button type="button" class="btn btn-primary" id="addItemRow">
+                        <i class="bi bi-plus-circle"></i> Add Row
+                    </button>
+                </div>
+
                 <template id="quotationItemTemplate">
                     <tr class="item-row">
                         <td class="row-index text-center">1</td>
                         <td>
                             <input type="text" class="form-control item-name" name="product_name[]"
-                                data-field="product_name" maxlength="255" placeholder="Product or service" required>
-                        </td>
-                        <td>
-                            <textarea class="form-control item-description" name="product_description[]"
-                                data-field="product_description" rows="2" maxlength="2000"
-                                placeholder="Optional details"></textarea>
+                                data-field="product_name" maxlength="255" placeholder="Item description" required>
                         </td>
                         <td>
                             <input type="number" class="form-control item-qty" name="quantity[]"
@@ -291,6 +287,10 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                         <td>
                             <input type="number" class="form-control item-discount" name="discount[]"
                                 data-field="discount" min="0" step="0.01" value="0.00">
+                        </td>
+                        <td>
+                            <input type="number" class="form-control item-tax" name="tax_percent[]"
+                                data-field="tax_percent" value="<?php echo $itemTaxRate; ?>" readonly>
                         </td>
                         <td class="text-right line-total"><?php echo $e($currencySymbol . ' 0.00'); ?></td>
                         <td class="text-center">
@@ -341,14 +341,18 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                 </div>
 
                 <div class="row">
-                    <?php if (!$isEdit): ?>
-                        <div class="col-md-6 mb-3">
-                            <label class="form-label font-weight-bold" for="notes">Notes</label>
-                            <textarea class="form-control" id="notes" name="notes" rows="4" maxlength="5000"
-                                placeholder="Notes visible on the quotation"><?php echo $e($quotation['notes']); ?></textarea>
+                    <div class="col-md-6 mb-3">
+                        <label class="form-label font-weight-bold">Bank Details</label>
+                        <div class="border rounded bg-light p-3">
+                            <?php foreach (Quotation::bankDetails() as $bankLabel => $bankValue): ?>
+                                <div class="small mb-1">
+                                    <strong><?php echo $e($bankLabel); ?>:</strong>
+                                    <?php echo $e($bankValue); ?>
+                                </div>
+                            <?php endforeach; ?>
                         </div>
-                    <?php endif; ?>
-                    <div class="col-md-<?php echo $isEdit ? '12' : '6'; ?> mb-3">
+                    </div>
+                    <div class="col-md-6 mb-3">
                         <label class="form-label font-weight-bold" for="terms_conditions">Terms &amp; Conditions</label>
                         <textarea class="form-control" id="terms_conditions" name="terms_conditions" rows="4"
                             maxlength="5000"
@@ -359,10 +363,25 @@ $customerSuggestions = isset($customerSuggestions) && is_array($customerSuggesti
                 <div class="d-flex flex-wrap justify-content-end pt-2">
                     <a href="<?php echo $e($cancelUrl); ?>" class="btn btn-outline-secondary mr-2 mb-2 mb-sm-0">Cancel</a>
                     <?php if ($isEdit): ?>
-                        <button type="submit" class="btn btn-success px-4">
+                        <button type="submit" name="quotation_action" value="save"
+                            class="btn btn-success px-4 mr-2 mb-2 mb-sm-0">
                             <i class="bi bi-check2-circle"></i>
                             Update Quotation
                         </button>
+                        <?php
+                        $canSendFromForm = ($quotation['status'] ?? '') === 'Draft'
+                            || !empty($quotation['is_rejected'])
+                            || !empty($quotation['is_expired']);
+                        ?>
+                        <?php if ($canSendFromForm): ?>
+                            <button type="submit" name="quotation_action" value="save_and_resend"
+                                class="btn btn-primary px-4">
+                                <i class="bi bi-send"></i>
+                                <?php echo (($quotation['status'] ?? '') === 'Draft' && empty($quotation['is_rejected']) && empty($quotation['is_expired']))
+                                    ? 'Save &amp; Send Quotation'
+                                    : 'Save &amp; Resend Quotation'; ?>
+                            </button>
+                        <?php endif; ?>
                     <?php else: ?>
                         <button type="submit" name="quotation_action" value="save_draft"
                             class="btn btn-outline-secondary mr-2 mb-2 mb-sm-0">

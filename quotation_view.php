@@ -43,13 +43,14 @@ if ($pageError !== '') {
 $currency = (string) ($quotation['currency'] ?? 'INR');
 $currencySymbol = Quotation::currencySymbol($currency);
 $status = (string) $quotation['status'];
-$isConverted = $status === 'Converted';
-$allowedStatuses = array_values(array_filter(
-    Quotation::allowedTransitions($status),
-    static function ($allowedStatus) {
-        return $allowedStatus !== 'Converted';
-    }
-));
+$isConverted = !empty($quotation['is_converted']) || !empty($quotation['converted_invoice_id']);
+$responseStatus = !empty($quotation['is_accepted'])
+    ? 'Accepted'
+    : (!empty($quotation['is_rejected'])
+        ? 'Rejected'
+        : (!empty($quotation['is_expired']) ? 'Expired' : ''));
+$canEdit = !$isConverted;
+$displayStatus = $isConverted ? 'Converted' : ($responseStatus !== '' ? $responseStatus : $status);
 
 $whatsApp = Quotation::formatWhatsAppNumber($quotation['customer_phone'] ?? '');
 $shareMessage = 'Hello ' . ($quotation['customer_name'] ?? '') . ",\n\n"
@@ -73,15 +74,21 @@ if (isset($_GET['created'])) {
 } elseif (isset($_GET['draft_saved'])) {
     $statusNotice = 'Quotation saved as Draft successfully.';
 } elseif (isset($_GET['updated'])) {
-    $statusNotice = 'Quotation updated successfully.';
+    $statusNotice = isset($_GET['sent'])
+        ? 'Quotation updated and email sent successfully.'
+        : 'Quotation updated successfully.';
 } elseif (isset($_GET['converted'])) {
     $statusNotice = 'Quotation converted to an invoice successfully.';
+} elseif (isset($_GET['resent'])) {
+    $statusNotice = 'Quotation resent to the customer successfully.';
 } elseif (isset($_GET['sent'])) {
     $statusNotice = 'Quotation email sent successfully.';
 } elseif (isset($_GET['email_failed'])) {
     $statusNotice = 'Quotation saved as Draft, but the email could not be sent. You can try again from the Share option.';
 } elseif (isset($_GET['notice']) && $_GET['notice'] === 'converted') {
     $statusNotice = 'Converted quotations cannot be edited.';
+} elseif (isset($_GET['notice']) && $_GET['notice'] === 'read_only') {
+    $statusNotice = 'This quotation cannot be edited.';
 } elseif (isset($_GET['notice']) && $_GET['notice'] === 'convert_unavailable') {
     $statusNotice = 'This quotation cannot be converted. It must be Accepted and not already converted.';
 }
@@ -101,8 +108,8 @@ include('header.php');
                     <div class="pr-3">
                         <div class="d-flex flex-wrap align-items-center">
                             <h2 class="quotation-title mr-2">Quotation Details</h2>
-                            <span class="quotation-status <?php echo Quotation::escape('status-' . strtolower($status)); ?>">
-                                <?php echo Quotation::escape($status); ?>
+                            <span class="quotation-status <?php echo Quotation::escape('status-' . strtolower($displayStatus)); ?>">
+                                <?php echo Quotation::escape($displayStatus); ?>
                             </span>
                         </div>
                         <p class="quotation-subtitle mb-0"><?php echo Quotation::escape($quotation['quotation_no']); ?></p>
@@ -130,7 +137,7 @@ include('header.php');
                     <button type="button" class="btn btn-success mb-2" data-toggle="modal" data-target="#shareQuotationModal">
                         <i class="bi bi-share"></i> Share Quotation
                     </button>
-                    <?php if (!$isConverted): ?>
+                    <?php if ($canEdit): ?>
                         <a href="edit_quotation.php?update_id=<?php echo $quotationId; ?>" class="btn btn-outline-primary mb-2">
                             <i class="bi bi-pencil-square"></i> Edit Quotation
                         </a>
@@ -147,17 +154,24 @@ include('header.php');
                             <div class="label">Valid Until</div>
                             <div class="value"><?php echo date('d M Y', strtotime((string) $quotation['valid_until'])); ?></div>
                             <div class="label">Status</div>
-                            <div class="value<?php echo (empty($quotation['accepted_at']) && empty($quotation['rejected_at'])) ? ' mb-0' : ''; ?>"><?php echo Quotation::escape($status); ?></div>
-                            <?php if (!empty($quotation['accepted_at'])): ?>
+                            <div class="value<?php echo (empty($quotation['accepted_at']) && empty($quotation['rejected_at'])) ? ' mb-0' : ''; ?>"><?php echo Quotation::escape($displayStatus); ?></div>
+                            <?php if ($responseStatus === 'Accepted' && !empty($quotation['accepted_at'])): ?>
+                                <div class="label">Customer Response</div>
+                                <div class="value">Accepted</div>
                                 <div class="label">Accepted On</div>
                                 <div class="value mb-0"><?php echo date('d M Y, h:i A', strtotime((string) $quotation['accepted_at'])); ?></div>
-                            <?php elseif (!empty($quotation['rejected_at'])): ?>
+                            <?php elseif ($responseStatus === 'Rejected' && !empty($quotation['rejected_at'])): ?>
+                                <div class="label">Customer Response</div>
+                                <div class="value">Rejected</div>
                                 <div class="label">Rejected On</div>
                                 <div class="value<?php echo empty($quotation['rejection_reason']) ? ' mb-0' : ''; ?>"><?php echo date('d M Y, h:i A', strtotime((string) $quotation['rejected_at'])); ?></div>
                                 <?php if (!empty($quotation['rejection_reason'])): ?>
                                     <div class="label">Rejection Reason</div>
                                     <div class="value mb-0"><?php echo nl2br(Quotation::escape($quotation['rejection_reason'])); ?></div>
                                 <?php endif; ?>
+                            <?php elseif ($responseStatus === 'Expired'): ?>
+                                <div class="label">Validity</div>
+                                <div class="value mb-0">Expired</div>
                             <?php endif; ?>
                         </div>
                     </div>
@@ -190,11 +204,11 @@ include('header.php');
                         <thead>
                             <tr>
                                 <th style="width: 45px;">#</th>
-                                <th>Product / Service</th>
+                                <th>Description</th>
                                 <th style="width: 70px;">Qty</th>
                                 <th style="width: 110px;">Unit Price</th>
                                 <th style="width: 100px;">Discount</th>
-                                <th style="width: 120px;">Line Total</th>
+                                <th style="width: 120px;">Total</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -208,11 +222,6 @@ include('header.php');
                                         <td><?php echo $index + 1; ?></td>
                                         <td>
                                             <strong><?php echo Quotation::escape($item['product_name']); ?></strong>
-                                            <?php if (!empty($item['product_description'])): ?>
-                                                <div class="small quotation-muted mt-1">
-                                                    <?php echo nl2br(Quotation::escape($item['product_description'])); ?>
-                                                </div>
-                                            <?php endif; ?>
                                         </td>
                                         <td><?php echo rtrim(rtrim(number_format((float) $item['quantity'], 2, '.', ''), '0'), '.'); ?></td>
                                         <td><?php echo Quotation::escape($currencySymbol . ' ' . number_format((float) $item['unit_price'], 2)); ?></td>
@@ -230,7 +239,14 @@ include('header.php');
                         <div class="quotation-view-meta">
                             <div class="label">Terms &amp; Conditions</div>
                             <div class="value mb-0">
-                                <?php echo $quotation['terms_conditions'] !== '' ? nl2br(Quotation::escape($quotation['terms_conditions'])) : 'Thanks for doing business with us!'; ?>
+                                <?php echo trim((string) $quotation['terms_conditions']) !== '' ? nl2br(Quotation::escape($quotation['terms_conditions'])) : 'Thanks for doing business with us!'; ?>
+                            </div>
+                            <div class="label mt-3">Bank Details</div>
+                            <div class="value mb-0">
+                                <?php foreach (Quotation::bankDetails() as $bankLabel => $bankValue): ?>
+                                    <div><strong><?php echo Quotation::escape($bankLabel); ?>:</strong>
+                                        <?php echo Quotation::escape($bankValue); ?></div>
+                                <?php endforeach; ?>
                             </div>
                         </div>
                     </div>
@@ -272,7 +288,7 @@ include('header.php');
                 <div class="row">
                     <div class="col-lg-7 mb-3">
                         <div class="quotation-view-meta h-100">
-                            <div class="label">Update Status</div>
+                            <div class="label">Quotation Status</div>
                             <?php if ($isConverted): ?>
                                 <div class="value mb-0">
                                     This quotation has been converted to an invoice.
@@ -283,23 +299,12 @@ include('header.php');
                                     <?php endif; ?>
                                 </div>
                             <?php else: ?>
-                                <div class="d-flex flex-wrap align-items-center">
-                                    <select id="quotationStatusSelect" class="form-control mr-2 mb-2" style="max-width: 200px;">
-                                        <?php foreach ($allowedStatuses as $allowedStatus): ?>
-                                            <option value="<?php echo Quotation::escape($allowedStatus); ?>" <?php echo $allowedStatus === $status ? 'selected' : ''; ?>>
-                                                <?php echo Quotation::escape($allowedStatus); ?>
-                                            </option>
-                                        <?php endforeach; ?>
-                                    </select>
-                                    <button type="button" class="btn btn-primary mb-2" id="updateQuotationStatus">
-                                        <i class="bi bi-check2"></i> Update Status
+                                <div class="value mb-0"><?php echo Quotation::escape($displayStatus); ?></div>
+                                <?php if (!empty($quotation['is_rejected']) || !empty($quotation['is_expired'])): ?>
+                                    <button type="button" class="btn btn-primary mt-3" id="resendQuotation">
+                                        <i class="bi bi-send"></i> Resend Quotation
                                     </button>
-                                </div>
-                                <div id="statusUpdateAlert" class="small"></div>
-                                <?php if ($status !== 'Accepted'): ?>
-                                    <div class="small quotation-muted mt-1">
-                                        Accepted is recorded only when the customer confirms through the secure email link.
-                                    </div>
+                                    <div id="resendQuotationAlert" class="small mt-2"></div>
                                 <?php endif; ?>
                             <?php endif; ?>
                         </div>
@@ -315,7 +320,7 @@ include('header.php');
                                         <i class="bi bi-file-earmark-pdf"></i> Open Invoice
                                     </a>
                                 <?php endif; ?>
-                            <?php elseif ($status === 'Accepted'): ?>
+                            <?php elseif ($responseStatus === 'Accepted'): ?>
                                 <p class="mb-2">This quotation is accepted and ready to become an invoice.</p>
                                 <a href="create_invoice.php?from_quotation=<?php echo intval($quotationId); ?>"
                                     class="btn btn-success" id="convertQuotation">
@@ -501,39 +506,50 @@ include('header.php');
             });
         }
 
-        var updateButton = document.getElementById('updateQuotationStatus');
-        if (updateButton) {
-            updateButton.addEventListener('click', function () {
-                var select = document.getElementById('quotationStatusSelect');
-                if (!select || !select.value) {
+        var resendButton = document.getElementById('resendQuotation');
+        if (resendButton) {
+            resendButton.addEventListener('click', function () {
+                var box = document.getElementById('resendQuotationAlert');
+                var setMessage = function (message, type) {
+                    if (box) {
+                        box.className = 'small mt-2 ' + (type === 'error' ? 'text-danger' : 'text-success');
+                        box.textContent = message;
+                    }
+                };
+
+                if (!window.confirm('Resend this quotation email to the customer?')) {
                     return;
                 }
 
-                updateButton.disabled = true;
-                updateButton.textContent = 'Updating...';
+                resendButton.disabled = true;
+                resendButton.innerHTML = '<i class="bi bi-send"></i> Resending...';
+                setMessage('', 'success');
 
                 $.ajax({
                     url: 'action.php',
                     type: 'POST',
                     dataType: 'json',
                     data: {
-                        action: 'update_quotation_status',
+                        action: 'resend_quotation',
                         id: quotationId,
-                        status: select.value,
                         csrf_token: csrfToken
                     }
                 }).done(function (response) {
                     if (response && Number(response.status) === 1) {
-                        alertBox('statusUpdateAlert', response.message || 'Status updated.', 'success');
-                        window.location.reload();
+                        setMessage(response.message || 'Quotation resent successfully.', 'success');
+                        window.setTimeout(function () {
+                            window.location.href = 'quotation_view.php?id=' + encodeURIComponent(quotationId) + '&resent=1';
+                        }, 700);
                     } else {
-                        alertBox('statusUpdateAlert', (response && response.message) || 'Unable to update status.', 'error');
+                        setMessage((response && response.message) || 'Unable to resend the quotation.', 'error');
+                        resendButton.disabled = false;
+                        resendButton.innerHTML = '<i class="bi bi-send"></i> Resend Quotation';
                     }
                 }).fail(function (xhr) {
-                    alertBox('statusUpdateAlert', (xhr.responseJSON && xhr.responseJSON.message) || 'Unable to update status.', 'error');
-                }).always(function () {
-                    updateButton.disabled = false;
-                    updateButton.innerHTML = '<i class="bi bi-check2"></i> Update Status';
+                    setMessage((xhr.responseJSON && xhr.responseJSON.message) ||
+                        'Unable to resend the quotation.', 'error');
+                    resendButton.disabled = false;
+                    resendButton.innerHTML = '<i class="bi bi-send"></i> Resend Quotation';
                 });
             });
         }
@@ -541,7 +557,7 @@ include('header.php');
         var convertButton = document.getElementById('convertQuotation');
         if (convertButton) {
             convertButton.addEventListener('click', function (event) {
-                if (!window.confirm('Open the Create Invoice page with this quotation\'s details? The quotation will be marked as converted only after you save the invoice.')) {
+                if (!window.confirm('Open the invoice form with this quotation?')) {
                     event.preventDefault();
                 }
             });

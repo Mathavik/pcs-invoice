@@ -74,11 +74,19 @@ if (($_SERVER['REQUEST_METHOD'] ?? 'GET') === 'POST' && !empty($quotation)) {
 }
 
 $status = !empty($quotation) ? (string) $quotation['status'] : '';
+$responseStatus = !empty($quotation['is_converted'])
+    ? 'Converted'
+    : (!empty($quotation['is_accepted'])
+        ? 'Accepted'
+        : (!empty($quotation['is_rejected'])
+            ? 'Rejected'
+            : (!empty($quotation['is_expired']) ? 'Expired' : '')));
 $currency = !empty($quotation) ? (string) ($quotation['currency'] ?? 'INR') : 'INR';
 $currencySymbol = Quotation::currencySymbol($currency);
 $validUntil = !empty($quotation['valid_until']) ? (string) $quotation['valid_until'] : '';
 $isOpen = !empty($quotation)
-    && in_array($status, ['Draft', 'Sent'], true)
+    && $status === 'Sent'
+    && $responseStatus === ''
     && ($validUntil === '' || $validUntil >= date('Y-m-d'))
     && empty($quotation['converted_invoice_id']);
 
@@ -164,7 +172,7 @@ $e = static function ($value): string {
                             <thead>
                                 <tr>
                                     <th>#</th>
-                                    <th>Product / Service</th>
+                                    <th>Description</th>
                                     <th class="text-center">Qty</th>
                                     <th class="text-end">Unit Price</th>
                                     <th class="text-end">Discount</th>
@@ -182,9 +190,6 @@ $e = static function ($value): string {
                                             <td><?php echo $index + 1; ?></td>
                                             <td>
                                                 <strong><?php echo $e($item['product_name'] ?? ''); ?></strong>
-                                                <?php if (!empty($item['product_description'])): ?>
-                                                    <div class="small text-muted mt-1"><?php echo nl2br($e($item['product_description'])); ?></div>
-                                                <?php endif; ?>
                                             </td>
                                             <td class="text-center"><?php echo rtrim(rtrim(number_format((float) ($item['quantity'] ?? 0), 2, '.', ''), '0'), '.'); ?></td>
                                             <td class="text-end"><?php echo $e($currencySymbol . ' ' . number_format((float) ($item['unit_price'] ?? 0), 2)); ?></td>
@@ -216,16 +221,17 @@ $e = static function ($value): string {
                         </div>
                     </div>
 
-                    <?php if (!empty($quotation['notes'])): ?>
-                        <hr>
-                        <div class="text-muted small">Notes</div>
-                        <div><?php echo nl2br($e($quotation['notes'])); ?></div>
-                    <?php endif; ?>
-                    <?php if (!empty($quotation['terms_conditions'])): ?>
-                        <hr>
-                        <div class="text-muted small">Terms &amp; Conditions</div>
-                        <div><?php echo nl2br($e($quotation['terms_conditions'])); ?></div>
-                    <?php endif; ?>
+                    <hr>
+                    <div class="text-muted small">Terms &amp; Conditions</div>
+                    <div><?php echo nl2br($e(trim((string) ($quotation['terms_conditions'] ?? '')) !== '' ? $quotation['terms_conditions'] : 'Thanks for doing business with us!')); ?></div>
+
+                    <hr>
+                    <div class="text-muted small">Bank Details</div>
+                    <div>
+                        <?php foreach (Quotation::bankDetails() as $bankLabel => $bankValue): ?>
+                            <div><strong><?php echo $e($bankLabel); ?>:</strong> <?php echo $e($bankValue); ?></div>
+                        <?php endforeach; ?>
+                    </div>
                 </div>
             </div>
 
@@ -286,7 +292,7 @@ $e = static function ($value): string {
             <?php else: ?>
                 <div class="card shadow-sm">
                     <div class="card-body">
-                        <?php if ($status === 'Accepted'): ?>
+                        <?php if ($responseStatus === 'Accepted'): ?>
                             <h2 class="h5 text-success mb-1">Quotation accepted</h2>
                             <p class="mb-0 text-muted">
                                 Thank you. This quotation was accepted
@@ -296,7 +302,7 @@ $e = static function ($value): string {
                                     successfully.
                                 <?php endif; ?>
                             </p>
-                        <?php elseif ($status === 'Rejected'): ?>
+                        <?php elseif ($responseStatus === 'Rejected'): ?>
                             <h2 class="h5 text-danger mb-1">Quotation rejected</h2>
                             <p class="<?php echo empty($quotation['rejection_reason']) ? 'mb-0' : ''; ?> text-muted">
                                 This quotation was rejected
@@ -309,7 +315,7 @@ $e = static function ($value): string {
                             <?php if (!empty($quotation['rejection_reason'])): ?>
                                 <div class="small"><strong>Reason:</strong> <?php echo nl2br($e($quotation['rejection_reason'])); ?></div>
                             <?php endif; ?>
-                        <?php elseif ($status === 'Expired'): ?>
+                        <?php elseif ($responseStatus === 'Expired'): ?>
                             <h2 class="h5 text-warning mb-1">Quotation expired</h2>
                             <p class="mb-0 text-muted">
                                 This quotation expired on <?php echo $validUntil !== '' ? $e(date('d M Y', strtotime($validUntil))) : 'its validity date'; ?>
@@ -343,7 +349,7 @@ $e = static function ($value): string {
         var acceptForm = document.getElementById('acceptForm');
         if (acceptForm) {
             acceptForm.addEventListener('submit', function (event) {
-                if (!window.confirm('Please confirm that you accept this quotation. This action cannot be undone.')) {
+                if (!window.confirm('Accept this quotation?')) {
                     event.preventDefault();
                 }
             });
